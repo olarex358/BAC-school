@@ -1,0 +1,9 @@
+.login-page {
+    background: linear-gradient(to right, #007bff, #0056b3);
+    min-height: 100vh;
+}
+
+.login-card {
+    border: none;
+    border-radius: 1rem;
+}

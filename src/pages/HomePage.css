@@ -1,0 +1,117 @@
+/* HomePage.css */
+
+/* General Body and HTML structure */
+body,
+html {
+    scroll-behavior: smooth;
+}
+
+/* Hero Section Styling */
+.hero-section {
+    position: relative;
+    height: 100vh;
+    background: linear-gradient(rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0.6)), url('../../public/background.png') no-repeat center center/cover;
+    color: white;
+}
+
+.hero-content {
+    max-width: 800px;
+}
+
+.hero-content h1 {
+    font-size: 3.5rem;
+    font-weight: 700;
+}
+
+.hero-content p.lead {
+    font-size: 1.5rem;
+    margin-top: 1rem;
+}
+
+/* Card Styling */
+.card-icon {
+    font-size: 3rem;
+    color: #007bff;
+}
+
+.icon-circle {
+    width: 80px;
+    height: 80px;
+    background-color: #e9f5ff;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 1rem;
+}
+
+.card {
+    transition: transform 0.2s;
+    border: none;
+}
+
+.card:hover {
+    transform: translateY(-10px);
+}
+
+/* Testimonials Section */
+.testimonials-section {
+    background-color: #f8f9fa;
+}
+
+/* Navbar adjustments */
+.navbar {
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.navbar-brand {
+    font-weight: bold;
+}
+
+/* New Footer Styling */
+.footer {
+    background-color: #212529 !important;
+}
+
+.footer h5 {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+}
+
+.footer a {
+    text-decoration: none;
+}
+
+.footer a:hover {
+    color: #007bff !important;
+}.welcome-address-section {
+  padding: 60px 20px;
+  background: #f8fafc;
+  text-align: center;
+}
+
+.welcome-content {
+  max-width: 900px;
+  margin: auto;
+}
+
+.welcome-content h2 {
+  margin-bottom: 20px;
+}
+
+.welcome-content p {
+  line-height: 1.8;
+  margin-bottom: 15px;
+}
+
+.welcome-signature {
+  margin-top: 25px;
+  font-style: italic;
+}
+
+.welcome-signature span {
+  display: block;
+  font-size: 0.9rem;
+  color: #555;
+}

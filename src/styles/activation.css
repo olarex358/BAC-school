@@ -1,0 +1,45 @@
+.activation-container {
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: #f4f6f8;
+}
+
+.activation-card {
+    background: white;
+    padding: 2rem;
+    width: 100%;
+    max-width: 400px;
+    border-radius: 8px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+    text-align: center;
+}
+
+.activation-card h1 {
+    margin-bottom: 1rem;
+}
+
+.activation-card input {
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 1rem;
+}
+
+.activation-card button {
+    width: 100%;
+    padding: 10px;
+    background: #1e88e5;
+    color: white;
+    border: none;
+    cursor: pointer;
+}
+
+.activation-card button:disabled {
+    background: #aaa;
+}
+
+.error {
+    color: red;
+    margin-bottom: 1rem;
+}

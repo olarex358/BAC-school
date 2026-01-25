@@ -1,0 +1,64 @@
+.admission-letter {
+  position: relative;
+  padding: 40px;
+  background: #fff;
+  max-width: 800px;
+  margin: auto;
+  line-height: 1.7;
+}
+
+.letter-header {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.logo {
+  width: 70px;
+}
+
+.title {
+  text-align: center;
+  margin: 20px 0;
+}
+
+.date {
+  text-align: right;
+}
+
+/* Watermark */
+.watermark {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  opacity: 0.08;
+  pointer-events: none;
+}
+
+.watermark img {
+  width: 300px;
+}
+
+/* Signature */
+.signature {
+  margin-top: 40px;
+}
+
+/* Print rules */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  .printable,
+  .printable * {
+    visibility: visible;
+  }
+
+  .printable {
+    position: absolute;
+    inset: 0;
+  }
+}

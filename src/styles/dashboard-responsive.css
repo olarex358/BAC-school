@@ -1,0 +1,25 @@
+/* FORCE PC LAYOUT ON MOBILE */
+.dashboard-wrapper {
+    width: 100%;
+}
+
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+}
+
+.card {
+    min-width: 220px;
+}
+
+/* MOBILE: SCROLL INSTEAD OF STACK */
+@media (max-width: 768px) {
+    .dashboard-wrapper {
+        overflow-x: auto;
+    }
+
+    .dashboard-container {
+        min-width: 1200px;
+    }
+}

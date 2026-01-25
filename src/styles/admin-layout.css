@@ -1,0 +1,85 @@
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #f4f6f8;
+}
+
+.app-header {
+    background: #1e3a8a;
+    color: white;
+    padding: 15px;
+    display: flex;
+    justify-content: space-between;
+}
+
+.role-badge {
+    background: #facc15;
+    color: #000;
+    padding: 2px 8px;
+    margin-left: 8px;
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+.app-footer {
+    background: #111827;
+    color: #ccc;
+    text-align: center;
+    padding: 10px;
+    margin-top: 40px;
+}
+
+.content-section {
+    padding: 20px;
+    background: white;
+    margin: 20px;
+    border-radius: 8px;
+}
+
+.attendance-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.attendance-table th,
+.attendance-table td {
+    border: 1px solid #ddd;
+    padding: 8px;
+}
+
+.attendance-table th {
+    background: #f1f5f9;
+}
+
+button {
+    padding: 6px 12px;
+    background: #2563eb;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+button:hover {
+    background: #1d4ed8;
+}@media print {
+    body {
+        background: white;
+    }
+
+    .app-header,
+    .app-footer,
+    button {
+        display: none;
+    }
+
+    .printable {
+        margin: 0;
+        padding: 0;
+    }
+
+    pre {
+        font-size: 11px;
+        white-space: pre-wrap;
+    }
+}
