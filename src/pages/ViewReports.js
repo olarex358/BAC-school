@@ -1,299 +1,438 @@
 // src/pages/ViewReports.js
-import React, { useState, useEffect } from 'react';
-import useLocalStorage from '../hooks/useLocalStorage';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useMemo, useState } from "react";
+import { apiFetch } from "../api";
+import { useAuth } from "../context/AuthContext";
 
 function ViewReports() {
-  const [loggedInUser, setLoggedInUser] = useState(null);
-  const navigate = useNavigate();
-  
-  // Update hooks to get data from the backend
-  const [students] = useLocalStorage('schoolPortalStudents', [], 'http://localhost:5000/api/schoolPortalStudents');
-  const [results] = useLocalStorage('schoolPortalResults', [], 'http://localhost:5000/api/schoolPortalResults');
-  const [subjects] = useLocalStorage('schoolPortalSubjects', [], 'http://localhost:5000/api/schoolPortalSubjects');
-  
-  const [reportClassSelect, setReportClassSelect] = useState('');
-  const [reportStudentSelect, setReportStudentSelect] = useState('');
-  const [generatedReport, setGeneratedReport] = useState(null);
-  const [reportMessage, setReportMessage] = useState(null);
-  
+  const { user } = useAuth();
+
+  const [students, setStudents] = useState([]);
+  const [subjects, setSubjects] = useState([]);
+  const [results, setResults] = useState([]);
+
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(null);
+
+  // filters
+  const [classSelect, setClassSelect] = useState("");
+  const [studentSelect, setStudentSelect] = useState("");
+
+  // report mode
+  const [mode, setMode] = useState("individual"); // "individual" | "class"
+
+  // message
+  const [msg, setMsg] = useState(null);
+
+  /* =========================
+     Load data (online-first)
+  ========================= */
   useEffect(() => {
-    const user = JSON.parse(localStorage.getItem('loggedInUser'));
-    if (user && (user.type === 'admin' || user.type === 'staff')) {
-      setLoggedInUser(user);
-    } else {
-      navigate('/login');
-    }
-  }, []);
-  
-  const getGrade = (totalScore) => {
-    if (totalScore >= 70) return 'A';
-    if (totalScore >= 60) return 'B';
-    if (totalScore >= 50) return 'C';
-    if (totalScore >= 40) return 'D';
-    return 'F';
-  };
+    const load = async () => {
+      setLoading(true);
+      setFetchError(null);
 
-  const getStudentName = (admissionNo) => {
-    const student = students.find(s => s.admissionNo === admissionNo);
-    return student ? `${student.firstName} ${student.lastName}` : 'Unknown Student';
-  };
-  
-  const getStudentContact = (admissionNo) => {
-    const student = students.find(s => s.admissionNo === admissionNo);
-    return {
-      email: student?.contactEmail || 'student@example.com',
-      whatsapp: student?.contactPhone || '1234567890'
-    };
-  };
-  
-  const getSubjectName = (subjectCode) => {
-    const subject = subjects.find(s => s.subjectCode === subjectCode);
-    return subject ? subject.subjectName : 'Unknown Subject';
-  };
+      try {
+        const [stuRes, subRes, resRes] = await Promise.all([
+          apiFetch("/api/schoolPortalStudents"),
+          apiFetch("/api/schoolPortalSubjects"),
+          apiFetch("/api/schoolPortalResults"),
+        ]);
 
-  const generateIndividualReport = () => {
-    setReportMessage(null);
-    if (!reportStudentSelect) {
-      setReportMessage({ type: 'error', text: 'Please select a student to generate an individual report.' });
-      setGeneratedReport(null);
-      return;
-    }
-    const student = students.find(s => s.admissionNo === reportStudentSelect);
-    if (!student) {
-      setReportMessage({ type: 'error', text: 'Student not found.' });
-      setGeneratedReport(null);
-      return;
-    }
-    const studentResults = results.filter(r => r.studentNameSelect === reportStudentSelect);
-    let reportHtml = `
-      <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 8px;">
-      <h3 style="color: #333;">Individual Report for ${student.firstName} ${student.lastName} (${student.admissionNo})</h3>
-      <p><strong>Class:</strong> ${student.studentClass}</p>
-      <h4 style="margin-top: 20px; color: #555;">Results:</h4>
-    `;
-    if (studentResults.length > 0) {
-      reportHtml += `
-        <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
-          <thead>
-            <tr>
-              <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">Subject</th>
-              <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">Term</th>
-              <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">1st CA (10%)</th>
-              <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">2nd CA (10%)</th>
-              <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">Assignment (20%)</th>
-              <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">Exam (60%)</th>
-              <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">Total (100%)</th>
-              <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">Grade</th>
-            </tr>
-          </thead>
-          <tbody>
-      `;
-      studentResults.forEach(r => {
-        const { total, grade } = { total: r.totalScore, grade: r.grade };
-        reportHtml += `
-          <tr>
-            <td style="border: 1px solid #ddd; padding: 8px;">${getSubjectName(r.subjectSelect)}</td>
-            <td style="border: 1px solid #ddd; padding: 8px;">${r.termSelect}</td>
-            <td style="border: 1px solid #ddd; padding: 8px;">${r.firstCaScore}</td>
-            <td style="border: 1px solid #ddd; padding: 8px;">${r.secondCaScore}</td>
-            <td style="border: 1px solid #ddd; padding: 8px;">${r.assignmentScore}</td>
-            <td style="border: 1px solid #ddd; padding: 8px;">${r.examScore}</td>
-            <td style="border: 1px solid #ddd; padding: 8px;"><strong>${total}</strong></td>
-            <td style="border: 1px solid #ddd; padding: 8px;"><strong>${grade}</strong></td>
-          </tr>
-        `;
-      });
-      reportHtml += `
-          </tbody>
-        </table>
-      `;
-    } else {
-      reportHtml += `<p style="color: #888;">No results found for this student.</p>`;
-    }
-    reportHtml += `</div>`;
-    setGeneratedReport(<div dangerouslySetInnerHTML={{ __html: reportHtml }} />);
-  };
-  
-  const generateClassReport = () => {
-    setReportMessage(null);
-    if (!reportClassSelect) {
-      setReportMessage({ type: 'error', text: 'Please select a class to generate a class report.' });
-      setGeneratedReport(null);
-      return;
-    }
-    const studentsInClass = students.filter(s => s.studentClass === reportClassSelect);
-    if (studentsInClass.length === 0) {
-      setReportMessage({ type: 'error', text: 'No students found in this class.' });
-      setGeneratedReport(null);
-      return;
-    }
-    let reportHtml = `
-      <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 8px;">
-      <h3 style="color: #333;">Class Report for ${reportClassSelect}</h3>
-    `;
-    studentsInClass.forEach(student => {
-      const studentResults = results.filter(r => r.studentNameSelect === student.admissionNo);
-      reportHtml += `
-        <h4 style="margin-top: 25px; color: #555;">${student.firstName} ${student.lastName} (${student.admissionNo})</h4>
-      `;
-      if (studentResults.length > 0) {
-        reportHtml += `
-          <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
-            <thead>
-              <tr>
-                <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">Subject</th>
-                <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">Term</th>
-                <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">1st CA (10%)</th>
-                <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">2nd CA (10%)</th>
-                <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">Assignment (20%)</th>
-                <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">Exam (60%)</th>
-                <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">Total (100%)</th>
-                <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">Grade</th>
-              </tr>
-            </thead>
-            <tbody>
-        `;
-        studentResults.forEach(r => {
-          const { total, grade } = { total: r.totalScore, grade: r.grade };
-          reportHtml += `
-            <tr>
-              <td style="border: 1px solid #ddd; padding: 8px;">${getSubjectName(r.subjectSelect)}</td>
-              <td style="border: 1px solid #ddd; padding: 8px;">${r.termSelect}</td>
-              <td style="border: 1px solid #ddd; padding: 8px;">${r.firstCaScore}</td>
-              <td style="border: 1px solid #ddd; padding: 8px;">${r.secondCaScore}</td>
-              <td style="border: 1px solid #ddd; padding: 8px;">${r.assignmentScore}</td>
-              <td style="border: 1px solid #ddd; padding: 8px;">${r.examScore}</td>
-              <td style="border: 1px solid #ddd; padding: 8px;"><strong>${total}</strong></td>
-              <td style="border: 1px solid #ddd; padding: 8px;"><strong>${grade}</strong></td>
-            </tr>
-          `;
-        });
-        reportHtml += `
-            </tbody>
-          </table>
-        `;
-      } else {
-        reportHtml += `<p style="color: #888;">No results found for this student.</p>`;
+        if (!stuRes.ok) {
+          const e = await stuRes.json().catch(() => ({}));
+          throw new Error(e.message || `Failed to fetch students (${stuRes.status})`);
+        }
+        if (!subRes.ok) {
+          const e = await subRes.json().catch(() => ({}));
+          throw new Error(e.message || `Failed to fetch subjects (${subRes.status})`);
+        }
+        if (!resRes.ok) {
+          const e = await resRes.json().catch(() => ({}));
+          throw new Error(e.message || `Failed to fetch results (${resRes.status})`);
+        }
+
+        const stu = await stuRes.json().catch(() => []);
+        const sub = await subRes.json().catch(() => []);
+        const res = await resRes.json().catch(() => []);
+
+        setStudents(Array.isArray(stu) ? stu : []);
+        setSubjects(Array.isArray(sub) ? sub : []);
+        setResults(Array.isArray(res) ? res : []);
+      } catch (e) {
+        setFetchError(e.message || "Failed to load data");
+      } finally {
+        setLoading(false);
       }
+    };
+
+    load();
+  }, []);
+
+  /* =========================
+     Helpers
+  ========================= */
+  const subjectName = (subjectSelect) => {
+    const found = subjects.find(
+      (s) => s.subjectCode === subjectSelect || s.subjectSelect === subjectSelect
+    );
+    return found?.subjectName || subjectSelect || "Unknown Subject";
+  };
+
+  const getStudent = (admissionNo) =>
+    students.find((s) => s.admissionNo === admissionNo) || null;
+
+  const gradeFromTotal = (total) => {
+    const t = Number(total || 0);
+    if (t >= 70) return "A";
+    if (t >= 60) return "B";
+    if (t >= 50) return "C";
+    if (t >= 40) return "D";
+    return "F";
+  };
+
+  const uniqueClasses = useMemo(() => {
+    const list = students.map((s) => s.studentClass).filter(Boolean);
+    return [...new Set(list)].sort();
+  }, [students]);
+
+  const studentsInClass = useMemo(() => {
+    if (!classSelect) return [];
+    return students.filter((s) => s.studentClass === classSelect);
+  }, [students, classSelect]);
+
+  const resultsForStudent = (admissionNo) => {
+    // Your existing schema uses studentNameSelect as admissionNo
+    return results.filter((r) => r.studentNameSelect === admissionNo);
+  };
+
+  const resultsForClass = (className) => {
+    const inClass = students.filter((s) => s.studentClass === className);
+    const admissionNos = new Set(inClass.map((s) => s.admissionNo));
+    return results.filter((r) => admissionNos.has(r.studentNameSelect));
+  };
+
+  const currentStudent = useMemo(() => {
+    if (!studentSelect) return null;
+    return getStudent(studentSelect);
+  }, [studentSelect, students]);
+
+  const individualRows = useMemo(() => {
+    if (!studentSelect) return [];
+    const rows = resultsForStudent(studentSelect);
+
+    // Sort by term then subject
+    return rows.slice().sort((a, b) => {
+      const tA = String(a.termSelect || "");
+      const tB = String(b.termSelect || "");
+      if (tA !== tB) return tA.localeCompare(tB);
+      return String(a.subjectSelect || "").localeCompare(String(b.subjectSelect || ""));
     });
-    reportHtml += `</div>`;
-    setGeneratedReport(<div dangerouslySetInnerHTML={{ __html: reportHtml }} />);
-  };
-  
-  const sendReportByEmail = () => {
-    setReportMessage(null);
-    if (!generatedReport || !reportStudentSelect) {
-      setReportMessage({type: 'error', text: 'Please generate an individual report first to send via Email.'});
-      return;
-    }
-    const studentContact = getStudentContact(reportStudentSelect);
-    const studentName = getStudentName(reportStudentSelect);
-    console.log(`Simulating email send to ${studentContact.email} (${studentName})`);
-    console.log("Email Subject: Your Academic Report");
-    console.log("Email Body/Content:", generatedReport.props.dangerouslySetInnerHTML.__html);
-    setReportMessage({type: 'success', text: `Report sent to ${studentName}'s email (${studentContact.email}) (simulated).`});
-  };
-  
-  const sendReportByWhatsApp = () => {
-    setReportMessage(null);
-    if (!generatedReport || !reportStudentSelect) {
-      setReportMessage({type: 'error', text: 'Please generate an individual report first to send via WhatsApp.'});
-      return;
-    }
-    const studentContact = getStudentContact(reportStudentSelect);
-    const studentName = getStudentName(reportStudentSelect);
-    console.log(`Simulating WhatsApp send to ${studentContact.whatsapp} (${studentName})`);
-    console.log("WhatsApp Message: Your Academic Report is available. Check your email or portal.");
-    setReportMessage({type: 'success', text: `Report sent to ${studentName}'s WhatsApp (${studentContact.whatsapp}) (simulated).`});
-  };
-  
-  const clearReportSelection = () => {
-    setReportClassSelect('');
-    setReportStudentSelect('');
-    setGeneratedReport(null);
-    setReportMessage(null);
-  };
-  
-  const uniqueClasses = [''].concat([...new Set(students.map(s => s.studentClass))].sort());
-  const studentsInSelectedClass = students.filter(
-    s => reportClassSelect === '' || s.studentClass === reportClassSelect
-  );
-  
-  const loading = students.length === 0 || subjects.length === 0 || results.length === 0;
+  }, [studentSelect, results]);
 
-  const handleLogout = () => {
-    localStorage.removeItem('loggedInUser');
-    navigate('/login');
+  const classReportByStudent = useMemo(() => {
+    if (!classSelect) return [];
+    const inClass = studentsInClass;
+
+    return inClass.map((s) => ({
+      student: s,
+      rows: resultsForStudent(s.admissionNo),
+    }));
+  }, [classSelect, studentsInClass, results]);
+
+  /* =========================
+     UI actions
+  ========================= */
+  const reset = () => {
+    setMsg(null);
+    setStudentSelect("");
+    setClassSelect("");
   };
 
-  if (!loggedInUser || loading) {
-    return <div className="content-section">Loading data...</div>;
+  const printReport = () => {
+    window.print();
+  };
+
+  // Simulated actions (safe)
+  const sendByEmailSimulated = () => {
+    if (!studentSelect) {
+      setMsg({ type: "error", text: "Select a student first." });
+      return;
+    }
+    const s = getStudent(studentSelect);
+    setMsg({
+      type: "success",
+      text: `Simulated: Report sent to ${s?.contactEmail || "student email not set"}`,
+    });
+  };
+
+  const sendByWhatsAppSimulated = () => {
+    if (!studentSelect) {
+      setMsg({ type: "error", text: "Select a student first." });
+      return;
+    }
+    const s = getStudent(studentSelect);
+    setMsg({
+      type: "success",
+      text: `Simulated: Report sent to WhatsApp ${s?.contactPhone || "phone not set"}`,
+    });
+  };
+
+  /* =========================
+     Render states
+  ========================= */
+  if (loading) return <div className="content-section">Loading reports data…</div>;
+
+  if (fetchError) {
+    return (
+      <div
+        className="content-section"
+        style={{
+          color: "#b00020",
+          fontWeight: "bold",
+          padding: 20,
+          border: "1px solid #b00020",
+          borderRadius: 6,
+        }}
+      >
+        Error: {fetchError}
+      </div>
+    );
   }
 
   return (
     <div className="content-section">
-      <h1>View Student Reports</h1>
-      <div className="sub-section">
-        <h2>Generate Reports</h2>
-        {reportMessage && (
-            <div style={{ padding: '10px', marginBottom: '15px', borderRadius: '5px', color: 'white', backgroundColor: reportMessage.type === 'success' ? '#28a745' : '#dc3545' }}>
-                {reportMessage.text}
-            </div>
-        )}
-        <select
-          id="reportClassSelect"
-          value={reportClassSelect}
-          onChange={(e) => { setReportClassSelect(e.target.value); setReportStudentSelect(''); setGeneratedReport(null); setReportMessage(null); }}
-          style={{ width: '100%', marginBottom: '10px', padding: '8px', borderRadius: '4px', border: '1px solid #ccc' }}
+      <h1>View Results Reports</h1>
+      <p style={{ marginTop: -8, color: "#555" }}>
+        Logged in as: <b>{user?.username || user?.role || "User"}</b>
+      </p>
+
+      {msg && (
+        <div
+          style={{
+            padding: 10,
+            marginBottom: 15,
+            borderRadius: 6,
+            color: "white",
+            background: msg.type === "success" ? "#16a34a" : "#dc2626",
+          }}
         >
-          <option value="">Select Class</option>
-          {uniqueClasses.map(className => (
-            <option key={className} value={className}>{className}</option>
-          ))}
-        </select>
-        <select
-          id="reportStudentSelect"
-          value={reportStudentSelect}
-          onChange={(e) => { setReportStudentSelect(e.target.value); setGeneratedReport(null); setReportMessage(null); }}
-          disabled={!reportClassSelect}
-          style={{ width: '100%', marginBottom: '10px', padding: '8px', borderRadius: '4px', border: '1px solid #ccc' }}
-        >
-          <option value="">Select Student</option>
-          {studentsInSelectedClass.map(student => (
-            <option key={student._id} value={student.admissionNo}>
-              {student.firstName} {student.lastName} ({student.admissionNo})
-            </option>
-          ))}
-        </select>
-        <button
-          onClick={generateIndividualReport}
-          style={{ marginRight: '10px', backgroundColor: 'var(--primary-blue-dark)', borderColor: 'var(--primary-blue-dark)' }}
-        >
-          Generate Individual Report
-        </button>
-        <button
-          onClick={generateClassReport}
-          style={{ backgroundColor: 'var(--primary-blue-dark)', borderColor: 'var(--primary-blue-dark)' }}
-        >
-          Generate Class Report
-        </button>
-        <button onClick={clearReportSelection} style={{ marginLeft: '10px', backgroundColor: '#6c757d', borderColor: '#6c757d' }}>
-            Clear Selection
-        </button>
-        {generatedReport && (
-            <div style={{ marginTop: '20px', borderTop: '1px solid #eee', paddingTop: '20px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                <button onClick={sendReportByEmail}>Send by Email</button>
-                <button onClick={sendReportByWhatsApp} style={{ backgroundColor: '#28a745', borderColor: '#28a745' }}>Send by WhatsApp</button>
-                <button onClick={() => window.print()}>Print Report</button>
-            </div>
-        )}
-        <div id="reportDisplayArea" style={{ marginTop: '20px', padding: '15px', border: generatedReport ? '1px solid #ccc' : 'none', borderRadius: '8px', background: generatedReport ? 'white' : 'transparent' }}>
-          {generatedReport || <p style={{color: '#888'}}>Select a class or student and click a button to generate a report.</p>}
+          {msg.text}
         </div>
+      )}
+
+      {/* Mode */}
+      <div className="sub-section" style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <button
+          onClick={() => {
+            setMode("individual");
+            setMsg(null);
+          }}
+          style={{
+            background: mode === "individual" ? "var(--primary-blue-dark)" : "#6c757d",
+          }}
+        >
+          Individual Report
+        </button>
+
+        <button
+          onClick={() => {
+            setMode("class");
+            setMsg(null);
+          }}
+          style={{
+            background: mode === "class" ? "var(--primary-blue-dark)" : "#6c757d",
+          }}
+        >
+          Class Report
+        </button>
+
+        <button onClick={reset} style={{ background: "#6c757d" }}>
+          Clear Selection
+        </button>
+      </div>
+
+      {/* Filters */}
+      <div className="sub-section">
+        <h2>Filters</h2>
+
+        <div style={{ display: "grid", gap: 10, maxWidth: 600 }}>
+          <select
+            value={classSelect}
+            onChange={(e) => {
+              setClassSelect(e.target.value);
+              setStudentSelect("");
+              setMsg(null);
+            }}
+          >
+            <option value="">Select Class</option>
+            {uniqueClasses.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={studentSelect}
+            onChange={(e) => {
+              setStudentSelect(e.target.value);
+              setMsg(null);
+            }}
+            disabled={!classSelect || mode === "class"}
+          >
+            <option value="">Select Student</option>
+            {studentsInClass.map((s) => (
+              <option key={s._id || s.admissionNo} value={s.admissionNo}>
+                {s.firstName} {s.lastName} ({s.admissionNo})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Actions */}
+        <div style={{ marginTop: 15, display: "flex", gap: 10, flexWrap: "wrap" }}>
+          {mode === "individual" && (
+            <>
+              <button onClick={sendByEmailSimulated}>Send by Email (Simulated)</button>
+              <button onClick={sendByWhatsAppSimulated} style={{ background: "#16a34a" }}>
+                Send by WhatsApp (Simulated)
+              </button>
+            </>
+          )}
+          <button onClick={printReport}>Print</button>
+        </div>
+      </div>
+
+      {/* REPORT OUTPUT */}
+      <div className="sub-section">
+        <h2>Report Output</h2>
+
+        {mode === "individual" ? (
+          !studentSelect ? (
+            <p style={{ color: "#666" }}>Select a class and a student to view their report.</p>
+          ) : !currentStudent ? (
+            <p style={{ color: "#b00020" }}>Selected student not found.</p>
+          ) : (
+            <div style={{ background: "white", padding: 15, borderRadius: 8, border: "1px solid #eee" }}>
+              <h3>
+                {currentStudent.firstName} {currentStudent.lastName} ({currentStudent.admissionNo})
+              </h3>
+              <p>
+                <b>Class:</b> {currentStudent.studentClass}
+              </p>
+
+              {individualRows.length === 0 ? (
+                <p style={{ color: "#777" }}>No results found for this student.</p>
+              ) : (
+                <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 10 }}>
+                  <thead>
+                    <tr>
+                      <th style={th}>Subject</th>
+                      <th style={th}>Term</th>
+                      <th style={th}>1st CA</th>
+                      <th style={th}>2nd CA</th>
+                      <th style={th}>Assignment</th>
+                      <th style={th}>Exam</th>
+                      <th style={th}>Total</th>
+                      <th style={th}>Grade</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {individualRows.map((r, idx) => {
+                      const total = r.totalScore ?? r.total ?? 0;
+                      const grade = r.grade || gradeFromTotal(total);
+
+                      return (
+                        <tr key={r._id || idx}>
+                          <td style={td}>{subjectName(r.subjectSelect)}</td>
+                          <td style={td}>{r.termSelect || "-"}</td>
+                          <td style={td}>{r.firstCaScore ?? 0}</td>
+                          <td style={td}>{r.secondCaScore ?? 0}</td>
+                          <td style={td}>{r.assignmentScore ?? 0}</td>
+                          <td style={td}>{r.examScore ?? 0}</td>
+                          <td style={td}>
+                            <b>{total}</b>
+                          </td>
+                          <td style={td}>
+                            <b>{grade}</b>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )
+        ) : (
+          // CLASS REPORT
+          !classSelect ? (
+            <p style={{ color: "#666" }}>Select a class to view the class report.</p>
+          ) : (
+            <div style={{ display: "grid", gap: 18 }}>
+              <h3>Class Report: {classSelect}</h3>
+
+              {classReportByStudent.map(({ student, rows }) => (
+                <div
+                  key={student._id || student.admissionNo}
+                  style={{ background: "white", padding: 15, borderRadius: 8, border: "1px solid #eee" }}
+                >
+                  <h4 style={{ marginBottom: 6 }}>
+                    {student.firstName} {student.lastName} ({student.admissionNo})
+                  </h4>
+
+                  {rows.length === 0 ? (
+                    <p style={{ color: "#777" }}>No results found.</p>
+                  ) : (
+                    <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 10 }}>
+                      <thead>
+                        <tr>
+                          <th style={th}>Subject</th>
+                          <th style={th}>Term</th>
+                          <th style={th}>Total</th>
+                          <th style={th}>Grade</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((r, idx) => {
+                          const total = r.totalScore ?? r.total ?? 0;
+                          const grade = r.grade || gradeFromTotal(total);
+                          return (
+                            <tr key={r._id || idx}>
+                              <td style={td}>{subjectName(r.subjectSelect)}</td>
+                              <td style={td}>{r.termSelect || "-"}</td>
+                              <td style={td}>
+                                <b>{total}</b>
+                              </td>
+                              <td style={td}>
+                                <b>{grade}</b>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              ))}
+            </div>
+          )
+        )}
       </div>
     </div>
   );
 }
+
+const th = {
+  border: "1px solid #ddd",
+  padding: 8,
+  textAlign: "left",
+  background: "#f2f2f2",
+};
+
+const td = {
+  border: "1px solid #ddd",
+  padding: 8,
+};
 
 export default ViewReports;

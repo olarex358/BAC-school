@@ -1,454 +1,445 @@
 // src/pages/StaffManagement.js
-import React, { useState, useEffect, Fragment } from 'react';
-import { useNavigate } from 'react-router-dom';
-import useLocalStorage from '../hooks/useLocalStorage';
-import ConfirmModal from '../components/ConfirmModal';
+import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { apiFetch } from "../api";
+import { useAuth } from "../context/AuthContext";
+import ConfirmModal from "../components/ConfirmModal";
+
+const initialStaffState = {
+  surname: "",
+  firstname: "",
+  staffId: "",
+  role: "",
+  type: "staff", // helps backend consistency if needed
+  gender: "",
+  dateOfEmployment: "",
+  department: "",
+  qualifications: "",
+  contactEmail: "",
+  contactPhone: "",
+  resumeDocument: "",
+
+  assignedSubjects: [],
+  assignedClasses: [],
+
+  // Used only when creating new staff
+  password: "",
+};
 
 function StaffManagement() {
   const navigate = useNavigate();
+  const { user } = useAuth(); // auth handled by ProtectedRoute; this is just for display
 
-  // 1. UPDATED: useLocalStorage only for local persistence.
-  const [staffs, setStaffs] = useLocalStorage('schoolPortalStaff', []);
-  const [subjects] = useLocalStorage('schoolPortalSubjects', []);
-  const [students] = useLocalStorage('schoolPortalStudents', []);
-  
-  // NEW: State for API loading and fetching errors.
-  const [loadingStaffs, setLoadingStaffs] = useState(true);
+  // Data lists
+  const [staffs, setStaffs] = useState([]);
+  const [subjects, setSubjects] = useState([]);
+  const [students, setStudents] = useState([]);
+
+  // UI state
+  const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(null);
-  
-  const initialStaffState = {
-    surname: '',
-    firstname: '',
-    staffId: '',
-    role: '',
-    gender: '',
-    dateOfEmployment: '',
-    department: '',
-    qualifications: '',
-    contactEmail: '',
-    contactPhone: '',
-    resumeDocument: '',
-    assignedSubjects: [],
-    assignedClasses: [],
-    password: ''
+
+  const [searchTerm, setSearchTerm] = useState("");
+
+  // Form state
+  const [form, setForm] = useState(initialStaffState);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editMongoId, setEditMongoId] = useState(null);
+
+  const [submitting, setSubmitting] = useState(false);
+  const [formErrors, setFormErrors] = useState({});
+
+  // Modals
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [staffToDelete, setStaffToDelete] = useState(null);
+
+  const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
+
+  /* =========================
+     Helpers
+  ========================= */
+  const uniqueSubjects = useMemo(() => {
+    const list = (subjects || [])
+      .map((s) => s.subjectName || s.name || s.subjectCode)
+      .filter(Boolean);
+    return [...new Set(list)].sort();
+  }, [subjects]);
+
+  const uniqueClasses = useMemo(() => {
+    const list = (students || [])
+      .map((s) => s.studentClass || s.class || s.className)
+      .filter(Boolean);
+    return [...new Set(list)].sort();
+  }, [students]);
+
+  const generateStaffId = () => {
+    const year = new Date().getFullYear();
+    // Try to find last counter from existing staffId format: BAC/STF/2026/0001
+    const counters = staffs
+      .map((s) => String(s.staffId || ""))
+      .map((id) => {
+        const parts = id.split("/");
+        const last = parts[parts.length - 1];
+        const n = parseInt(last, 10);
+        return Number.isFinite(n) ? n : 0;
+      });
+    const next = (counters.length ? Math.max(...counters) : 0) + 1;
+    return `BAC/STF/${year}/${String(next).padStart(4, "0")}`;
   };
 
-  const [newStaff, setNewStaff] = useState(initialStaffState);
-  const [submitButtonText, setSubmitButtonText] = useState('Add Staff');
-  const [isEditing, setIsEditing] = useState(false);
-  const [editStaffId, setEditStaffId] = useState(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [formErrors, setFormErrors] = useState({});
-  const [message, setMessage] = useState(null);
-  const [isModalOpen, setIsModalOpen] = useState(false); // Used for Deletion
-  const [staffToDelete, setStaffToDelete] = useState(null); // Used for Deletion
-  
-  // ⭐️ NEW: State for Registration Success Modal
-  const [isRegSuccessModalOpen, setIsRegSuccessModalOpen] = useState(false);
-  const [newlyRegisteredStaff, setNewlyRegisteredStaff] = useState(null);
+  const validate = (data) => {
+    const errors = {};
 
-  // 2. FIX: Securely fetch initial staff data on component mount
+    if (!data.surname.trim()) errors.surname = "Surname is required";
+    if (!data.firstname.trim()) errors.firstname = "First name is required";
+    if (!data.role) errors.role = "Role is required";
+    if (!data.gender) errors.gender = "Gender is required";
+    if (!data.department.trim()) errors.department = "Department is required";
+    if (!data.qualifications.trim()) errors.qualifications = "Qualifications is required";
+    if (!data.contactPhone.trim()) errors.contactPhone = "Phone is required";
+    if (!data.contactEmail.trim()) errors.contactEmail = "Email is required";
+
+    // Simple email check
+    if (data.contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.contactEmail)) {
+      errors.contactEmail = "Invalid email format";
+    }
+
+    // Password required only when creating
+    if (!isEditing && !data.password.trim()) errors.password = "Password is required for new staff";
+
+    return errors;
+  };
+
+  const showSuccess = (msg) => {
+    setSuccessMessage(msg);
+    setIsSuccessModalOpen(true);
+  };
+
+  /* =========================
+     Load Data (Online-first)
+  ========================= */
   useEffect(() => {
-    const fetchStaffs = async () => {
-        setLoadingStaffs(true);
-        setFetchError(null);
-        
-        const adminToken = localStorage.getItem('adminToken'); // Get the token
-        
-        if (!adminToken) {
-            // FIX: If no token, set an error message and stop loading.
-            setFetchError('No Admin Token found. Please log in to view staff data.');
-            setLoadingStaffs(false);
-            return;
-        }
-        
-        try {
-            const response = await fetch('http://localhost:5000/api/schoolPortalStaff', {
-                method: 'GET',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${adminToken}`, // CRITICAL FIX: Add the Authorization header
-                },
-            });
-            
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.message || `Failed to fetch staff data (Status: ${response.status}).`);
-            }
+    const loadAll = async () => {
+      setLoading(true);
+      setFetchError(null);
 
-            const data = await response.json();
-            setStaffs(data);
-            
-        } catch (err) {
-            setFetchError(err.message || 'An unexpected error occurred during staff fetch.');
-            console.error('Fetch error:', err);
-        } finally {
-            setLoadingStaffs(false);
+      try {
+        // Staff
+        const staffRes = await apiFetch("/api/schoolPortalStaff");
+        if (!staffRes.ok) {
+          const err = await staffRes.json().catch(() => ({}));
+          throw new Error(err.message || `Failed to fetch staff (Status ${staffRes.status})`);
         }
+        const staffData = await staffRes.json();
+        setStaffs(Array.isArray(staffData) ? staffData : []);
+
+        // Subjects (optional but useful)
+        const subRes = await apiFetch("/api/schoolPortalSubjects");
+        if (subRes.ok) {
+          const subData = await subRes.json().catch(() => []);
+          setSubjects(Array.isArray(subData) ? subData : []);
+        }
+
+        // Students (for classes list)
+        const stuRes = await apiFetch("/api/schoolPortalStudents");
+        if (stuRes.ok) {
+          const stuData = await stuRes.json().catch(() => []);
+          setStudents(Array.isArray(stuData) ? stuData : []);
+        }
+      } catch (e) {
+        setFetchError(e.message || "Failed to load data");
+      } finally {
+        setLoading(false);
+      }
     };
-    
-    fetchStaffs();
+
+    loadAll();
   }, []);
 
-  const validateField = (name, value) => {
-    let error = '';
-    // ... (Validation logic remains the same) ...
-    switch (name) {
-      case 'surname':
-      case 'firstname':
-      case 'department':
-      case 'qualifications':
-        if (!value.trim()) error = 'This field cannot be empty.';
-        break;
-      case 'staffId':
-        if (!value.trim()) error = 'Staff ID is required.';
-        break;
-      case 'contactEmail':
-        if (!value.trim()) {
-          error = 'Email is required.';
-        } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
-          error = 'Invalid email format.';
-        }
-        break;
-      case 'contactPhone':
-        if (!value.trim()) {
-          error = 'Contact phone is required.';
-        } else if (!/^\d{10,15}$/.test(value)) {
-          error = 'Invalid phone number (10-15 digits).';
-        }
-        break;
-      case 'role':
-      case 'gender':
-        if (!value) error = 'Please select an option.';
-        break;
-      case 'dateOfEmployment':
-        if (!value) error = 'Date is required.';
-        break;
-      case 'password':
-        if (!isEditing && !value) error = 'Password is required for new staff.';
-        break;
-      default:
-        break;
-    }
-    return error;
-  };
-  
+  /* =========================
+     Handlers
+  ========================= */
   const handleChange = (e) => {
     const { id, value, type, files, options } = e.target;
-    if (type === 'file') {
-      const file = files[0];
-      setNewStaff(prevStaff => ({
-        ...prevStaff,
-        [id]: file ? file.name : ''
-      }));
-      setFormErrors(prevErrors => ({ ...prevErrors, [id]: '' }));
-    } else if (id === 'assignedSubjects' || id === 'assignedClasses') {
-      const selectedValues = Array.from(options)
-        .filter(option => option.selected)
-        .map(option => option.value);
-      setNewStaff(prevStaff => ({
-        ...prevStaff,
-        [id]: selectedValues
-      }));
-    } else {
-      setNewStaff(prevStaff => ({
-        ...prevStaff,
-        [id]: value
-      }));
-      setFormErrors(prevErrors => ({ ...prevErrors, [id]: validateField(id, value) }));
+
+    // Multi-select
+    if (id === "assignedSubjects" || id === "assignedClasses") {
+      const selected = Array.from(options)
+        .filter((o) => o.selected)
+        .map((o) => o.value);
+      setForm((p) => ({ ...p, [id]: selected }));
+      return;
     }
-    setMessage(null);
-  };
-  
-  const generateStaffId = () => {
-    const currentYear = new Date().getFullYear();
-    const maxCounter = staffs.length > 0
-      ? Math.max(...staffs.map(s => parseInt(s.staffId.split('/').pop() || 0)))
-      : 0;
-    const nextCounter = maxCounter + 1;
-    return `BAC/STF/${currentYear}/${String(nextCounter).padStart(4, '0')}`;
+
+    // File (store just name for now)
+    if (type === "file") {
+      const file = files?.[0];
+      setForm((p) => ({ ...p, resumeDocument: file ? file.name : "" }));
+      return;
+    }
+
+    setForm((p) => ({ ...p, [id]: value }));
   };
 
-  // 3. FIX: Secure API call for submit (POST/PUT) and handle success modal
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setMessage(null);
-    let errors = {};
-    Object.keys(newStaff).forEach(key => {
-        if (key === 'password' && isEditing) return; // Skip password validation on edit if blank
-        const error = validateField(key, newStaff[key]);
-        if (error) errors[key] = error;
+  const clearForm = () => {
+    setForm(initialStaffState);
+    setIsEditing(false);
+    setEditMongoId(null);
+    setFormErrors({});
+  };
+
+  const startEdit = (staff) => {
+    setIsEditing(true);
+    setEditMongoId(staff._id);
+
+    setForm({
+      surname: staff.surname || "",
+      firstname: staff.firstname || "",
+      staffId: staff.staffId || "",
+      role: staff.role || "",
+      type: staff.type || "staff",
+      gender: staff.gender || "",
+      dateOfEmployment: staff.dateOfEmployment || "",
+      department: staff.department || "",
+      qualifications: staff.qualifications || "",
+      contactEmail: staff.contactEmail || "",
+      contactPhone: staff.contactPhone || "",
+      resumeDocument: staff.resumeDocument || "",
+      assignedSubjects: staff.assignedSubjects || [],
+      assignedClasses: staff.assignedClasses || [],
+      password: "", // keep blank during edit
     });
 
-    if (Object.keys(errors).length > 0) {
-      setFormErrors(errors);
-      setMessage({ type: 'error', text: 'Please correct the errors in the form.' });
+    setFormErrors({});
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const askDelete = (staff) => {
+    setStaffToDelete(staff);
+    setIsDeleteModalOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!staffToDelete?._id) {
+      setIsDeleteModalOpen(false);
       return;
     }
-    
-    const adminToken = localStorage.getItem('adminToken');
-    if (!adminToken) {
-        setMessage({ type: 'error', text: 'Admin token missing. Please log in to perform this action.' });
-        return;
-    }
-    
-    const secureHeaders = { 
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${adminToken}`, 
-    };
 
-    let finalStaffId = newStaff.staffId;
-    // Auto-generate ID only for new registration where no ID has been entered
-    if (!isEditing && !finalStaffId) {
-      finalStaffId = generateStaffId();
+    setSubmitting(true);
+    try {
+      const res = await apiFetch(`/api/schoolPortalStaff/${staffToDelete._id}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Failed to delete staff");
+      }
+
+      setStaffs((prev) => prev.filter((s) => s._id !== staffToDelete._id));
+      showSuccess(`Staff ${staffToDelete.firstname || ""} deleted successfully.`);
+    } catch (e) {
+      alert(e.message || "Delete failed");
+    } finally {
+      setSubmitting(false);
+      setIsDeleteModalOpen(false);
+      setStaffToDelete(null);
     }
-    
-    const staffToSave = { 
-      ...newStaff, 
-      staffId: finalStaffId,
-      username: finalStaffId,
-      password: newStaff.password || (isEditing ? undefined : 'password123')
-    };
-    
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (submitting) return;
+
+    const final = { ...form };
+
+    // Auto staffId if creating and blank
+    if (!isEditing && !final.staffId.trim()) {
+      final.staffId = generateStaffId();
+    }
+
+    // Ensure username aligns with staffId (your backend uses username often)
+    if (!final.username) final.username = final.staffId;
+
+    const errors = validate(final);
+    setFormErrors(errors);
+    if (Object.keys(errors).length) return;
+
+    setSubmitting(true);
     try {
       if (isEditing) {
-        // PUT request for editing
-        const response = await fetch(`http://localhost:5000/api/schoolPortalStaff/${editStaffId}`, {
-          method: 'PUT',
-          headers: secureHeaders,
-          body: JSON.stringify(staffToSave),
+        // Do not send password if blank on edit
+        const payload = { ...final };
+        if (!payload.password) delete payload.password;
+
+        const res = await apiFetch(`/api/schoolPortalStaff/${editMongoId}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
         });
-        if (response.ok) {
-          const updatedStaff = await response.json();
-          setStaffs(prevStaffs =>
-            prevStaffs.map(staff =>
-              staff._id === updatedStaff._id ? updatedStaff : staff
-            )
-          );
-          setMessage({ type: 'success', text: `Staff ${updatedStaff.firstname} updated successfully!` });
-        } else {
-          const errorData = await response.json();
-          setMessage({ type: 'error', text: errorData.message || 'Failed to update staff.' });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.message || "Failed to update staff");
         }
+
+        const updated = await res.json().catch(() => null);
+        if (updated?._id) {
+          setStaffs((prev) => prev.map((s) => (s._id === updated._id ? updated : s)));
+        } else {
+          // fallback refresh list
+          const refresh = await apiFetch("/api/schoolPortalStaff");
+          const list = await refresh.json().catch(() => []);
+          setStaffs(Array.isArray(list) ? list : []);
+        }
+
+        showSuccess("Staff updated successfully.");
+        clearForm();
       } else {
-        // POST request for new staff
-        const response = await fetch('http://localhost:5000/api/schoolPortalStaff', {
-          method: 'POST',
-          headers: secureHeaders,
-          body: JSON.stringify(staffToSave),
+        const res = await apiFetch("/api/schoolPortalStaff", {
+          method: "POST",
+          body: JSON.stringify(final),
         });
-        if (response.ok) {
-          const newStaffEntry = await response.json();
-          setStaffs(prevStaffs => [...prevStaffs, newStaffEntry]);
-          
-          // ⭐️ NEW: Set staff data and open success modal
-          setNewlyRegisteredStaff(newStaffEntry);
-          setIsRegSuccessModalOpen(true);
-        } else {
-          const errorData = await response.json();
-          setMessage({ type: 'error', text: errorData.message || 'Failed to add new staff.' });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.message || "Failed to add staff");
         }
+
+        const created = await res.json().catch(() => null);
+        if (created?._id) setStaffs((prev) => [created, ...prev]);
+
+        showSuccess(
+          `Staff registered successfully.\nStaff ID: ${final.staffId}\nUsername: ${final.staffId}`
+        );
+        clearForm();
       }
-    } catch (err) {
-      setMessage({ type: 'error', text: 'An unexpected error occurred. Please check your network connection.' });
-    }
-    
-    // Clear form and reset state for new registration
-    setNewStaff(initialStaffState);
-    setSubmitButtonText('Add Staff');
-    setIsEditing(false);
-    setFormErrors({});
-  };
-  
-  const editStaff = (staffIdToEdit) => {
-    const staffToEdit = staffs.find(s => s.staffId === staffIdToEdit);
-    if (staffToEdit) {
-      setNewStaff({ 
-        ...staffToEdit, 
-        // Ensure multi-select fields are arrays
-        assignedSubjects: staffToEdit.assignedSubjects || [],
-        assignedClasses: staffToEdit.assignedClasses || [],
-        password: '' // Clear password field for security
-      });
-      setSubmitButtonText('Update Staff');
-      setIsEditing(true);
-      setEditStaffId(staffToEdit._id);
-      setFormErrors({});
-      setMessage(null);
-    }
-  };
-  
-  const deleteStaff = async (staffIdToDelete) => {
-    setStaffToDelete(staffIdToDelete);
-    setIsModalOpen(true);
-  };
-
-  // 4. FIX: Secure API call for delete
-  const confirmDelete = async () => {
-    setIsModalOpen(false);
-    const staffToDeleteData = staffs.find(s => s.staffId === staffToDelete);
-    if (!staffToDeleteData) {
-      setMessage({ type: 'error', text: 'Staff not found.' });
-      return;
-    }
-    
-    const adminToken = localStorage.getItem('adminToken');
-    if (!adminToken) {
-        setMessage({ type: 'error', text: 'Admin token missing. Please log in to perform this action.' });
-        return;
-    }
-    
-    try {
-      const response = await fetch(`http://localhost:5000/api/schoolPortalStaff/${staffToDeleteData._id}`, {
-        method: 'DELETE',
-        headers: {
-            'Authorization': `Bearer ${adminToken}`, 
-        }
-      });
-      if (response.ok) {
-        setStaffs(prevStaffs => prevStaffs.filter(staff => staff.staffId !== staffToDelete));
-        setMessage({ type: 'success', text: 'Staff deleted successfully!' });
-      } else {
-        const errorData = await response.json();
-        setMessage({ type: 'error', text: errorData.message || 'Failed to delete staff.' });
-      }
-    } catch (err) {
-      setMessage({ type: 'error', text: 'An unexpected error occurred. Please check your network connection.' });
+    } catch (e2) {
+      alert(e2.message || "Save failed");
+    } finally {
+      setSubmitting(false);
     }
   };
 
-  const cancelDelete = () => {
-    setIsModalOpen(false);
-    setStaffToDelete(null);
-  };
-  
-  // 5. NEW: Function to close the success modal
-  const closeRegSuccessModal = () => {
-      setIsRegSuccessModalOpen(false);
-      setNewlyRegisteredStaff(null);
-  };
+  const filteredStaffs = useMemo(() => {
+    const t = searchTerm.trim().toLowerCase();
+    if (!t) return staffs;
 
-  const handleSearchChange = (e) => {
-    setSearchTerm(e.target.value);
-  };
-  
-  const clearSearchAndForm = () => {
-    setSearchTerm('');
-    setNewStaff(initialStaffState);
-    setSubmitButtonText('Add Staff');
-    setIsEditing(false);
-    setFormErrors({});
-    setMessage(null);
-  };
-  
-  const filteredStaffs = staffs.filter((staff) => {
-  const term = searchTerm.toLowerCase();
-
-  return (
-    (staff.firstname || "").toLowerCase().includes(term) ||
-    (staff.surname || "").toLowerCase().includes(term) ||
-    (staff.staffId || "").toLowerCase().includes(term) ||
-    (staff.role || "").toLowerCase().includes(term)
-  );
-});
-
-  const uniqueSubjects = [...new Set(subjects.map(s => s.subjectName))].sort();
-  const uniqueClasses = [...new Set(students.map(s => s.studentClass))].sort();
-
-  if (loadingStaffs) {
-      return <div className="content-section">Loading staff data...</div>;
-  }
-  
-  if (fetchError) {
+    return staffs.filter((s) => {
+      const name = `${s.surname || ""} ${s.firstname || ""}`.toLowerCase();
       return (
-          <div className="content-section" style={{ color: '#dc3545', fontWeight: 'bold', padding: '20px', border: '1px solid #dc3545', borderRadius: '5px' }}>
-              Error fetching data: {fetchError}. Please log in or check the API connection.
-          </div>
+        name.includes(t) ||
+        String(s.staffId || "").toLowerCase().includes(t) ||
+        String(s.role || "").toLowerCase().includes(t) ||
+        String(s.department || "").toLowerCase().includes(t)
       );
+    });
+  }, [staffs, searchTerm]);
+
+  /* =========================
+     UI
+  ========================= */
+  if (loading) return <div className="content-section">Loading staff data...</div>;
+
+  if (fetchError) {
+    return (
+      <div
+        className="content-section"
+        style={{
+          color: "#b00020",
+          fontWeight: "bold",
+          padding: 20,
+          border: "1px solid #b00020",
+          borderRadius: 6,
+        }}
+      >
+        Error fetching data: {fetchError}
+        <div style={{ marginTop: 10 }}>
+          <button onClick={() => navigate("/login")}>Go to Login</button>
+        </div>
+      </div>
+    );
   }
-  
+
   return (
     <div className="content-section">
-      <h2>Staff Management</h2>
+      <h1>Staff Management</h1>
+      <p style={{ marginTop: -8, color: "#555" }}>
+        Logged in as: <b>{user?.username || "Admin"}</b>
+      </p>
+
+      {/* Success Modal */}
+      <ConfirmModal
+        isOpen={isSuccessModalOpen}
+        message={successMessage}
+        onConfirm={() => setIsSuccessModalOpen(false)}
+        onCancel={() => setIsSuccessModalOpen(false)}
+        isAlert={true}
+      />
+
+      {/* Delete Modal */}
+      <ConfirmModal
+        isOpen={isDeleteModalOpen}
+        message={
+          staffToDelete
+            ? `Delete staff: ${staffToDelete.surname} ${staffToDelete.firstname} (${staffToDelete.staffId}) ?`
+            : "Delete this staff?"
+        }
+        onConfirm={confirmDelete}
+        onCancel={() => setIsDeleteModalOpen(false)}
+        isAlert={false}
+      />
+
+      {/* FORM */}
       <div className="sub-section">
-        <h3>{isEditing ? 'Edit Staff' : 'Add New Staff'}</h3>
-        {message && (
-          <div style={{ padding: '10px', marginBottom: '15px', borderRadius: '5px', color: 'white', backgroundColor: message.type === 'success' ? '#28a745' : '#dc3545' }}>
-            {message.text}
-          </div>
-        )}
-        <form id="staffForm" onSubmit={handleSubmit}>
+        <h2>{isEditing ? "Edit Staff" : "Add New Staff"}</h2>
+
+        <form onSubmit={handleSubmit} id="staffForm">
           <div className="form-group">
-            <label htmlFor="surname">Surname:</label>
-            <input
-              type="text"
-              id="surname"
-              placeholder="Surname"
-              required
-              value={newStaff.surname}
-              onChange={handleChange}
-              className={formErrors.surname ? 'input-error' : ''}
-            />
+            <label htmlFor="surname">Surname</label>
+            <input id="surname" value={form.surname} onChange={handleChange} />
             {formErrors.surname && <p className="error-text">{formErrors.surname}</p>}
           </div>
+
           <div className="form-group">
-            <label htmlFor="firstname">First Name:</label>
-            <input
-              type="text"
-              id="firstname"
-              placeholder="First Name"
-              required
-              value={newStaff.firstname}
-              onChange={handleChange}
-              className={formErrors.firstname ? 'input-error' : ''}
-            />
+            <label htmlFor="firstname">First Name</label>
+            <input id="firstname" value={form.firstname} onChange={handleChange} />
             {formErrors.firstname && <p className="error-text">{formErrors.firstname}</p>}
           </div>
+
           <div className="form-group">
-            <label htmlFor="staffId">Staff ID:</label>
+            <label htmlFor="staffId">Staff ID</label>
             <input
-              type="text"
               id="staffId"
-              placeholder={isEditing ? "Staff ID" : "Staff ID (Auto-generated/Manual)"}
-              value={newStaff.staffId}
+              value={form.staffId}
               onChange={handleChange}
-              readOnly={isEditing} // Assume staff ID is set on creation and shouldn't be edited
-              required
-              className={formErrors.staffId ? 'input-error' : ''}
+              readOnly={isEditing}
+              placeholder={isEditing ? "" : "Leave blank to auto-generate"}
             />
-            {formErrors.staffId && <p className="error-text">{formErrors.staffId}</p>}
             {!isEditing && (
-              <p style={{ fontSize: '0.8em', color: '#555' }}>
-                * Leave blank to auto-generate: {generateStaffId()}
-              </p>
+              <small style={{ color: "#666" }}>
+                Auto ID preview: <b>{generateStaffId()}</b>
+              </small>
             )}
           </div>
+
           <div className="form-group">
-            <label htmlFor="role">Role:</label>
-            <select
-              id="role"
-              required
-              value={newStaff.role}
-              onChange={handleChange}
-              className={formErrors.role ? 'input-error' : ''}
-            >
+            <label htmlFor="role">Role</label>
+            <select id="role" value={form.role} onChange={handleChange}>
               <option value="">Select Role</option>
-              <option value="Admin">Admin</option>
               <option value="Teacher">Teacher</option>
-              <option value="Support">Support Staff</option>
+              <option value="Class Teacher">Class Teacher</option>
               <option value="Non-Teaching">Non-Teaching</option>
+              <option value="Support">Support</option>
+              <option value="Staff">Staff</option>
+              <option value="Admin">Admin</option>
             </select>
             {formErrors.role && <p className="error-text">{formErrors.role}</p>}
           </div>
+
           <div className="form-group">
-            <label htmlFor="gender">Gender:</label>
-            <select
-              id="gender"
-              required
-              value={newStaff.gender}
-              onChange={handleChange}
-              className={formErrors.gender ? 'input-error' : ''}
-            >
+            <label htmlFor="gender">Gender</label>
+            <select id="gender" value={form.gender} onChange={handleChange}>
               <option value="">Select Gender</option>
               <option value="Male">Male</option>
               <option value="Female">Female</option>
@@ -456,142 +447,124 @@ function StaffManagement() {
             </select>
             {formErrors.gender && <p className="error-text">{formErrors.gender}</p>}
           </div>
+
           <div className="form-group">
-            <label htmlFor="dateOfEmployment">Date of Employment:</label>
+            <label htmlFor="dateOfEmployment">Date of Employment</label>
             <input
               type="date"
               id="dateOfEmployment"
-              required
-              value={newStaff.dateOfEmployment}
+              value={form.dateOfEmployment}
               onChange={handleChange}
-              className={formErrors.dateOfEmployment ? 'input-error' : ''}
             />
-            {formErrors.dateOfEmployment && <p className="error-text">{formErrors.dateOfEmployment}</p>}
           </div>
+
           <div className="form-group">
-            <label htmlFor="department">Department:</label>
-            <input
-              type="text"
-              id="department"
-              placeholder="Department (e.g., Science, Admin)"
-              required
-              value={newStaff.department}
-              onChange={handleChange}
-              className={formErrors.department ? 'input-error' : ''}
-            />
+            <label htmlFor="department">Department</label>
+            <input id="department" value={form.department} onChange={handleChange} />
             {formErrors.department && <p className="error-text">{formErrors.department}</p>}
           </div>
+
           <div className="form-group">
-            <label htmlFor="qualifications">Qualifications:</label>
-            <input
-              type="text"
-              id="qualifications"
-              placeholder="Qualifications (e.g., B.Sc. Comp. Sci.)"
-              required
-              value={newStaff.qualifications}
-              onChange={handleChange}
-              className={formErrors.qualifications ? 'input-error' : ''}
-            />
-            {formErrors.qualifications && <p className="error-text">{formErrors.qualifications}</p>}
+            <label htmlFor="qualifications">Qualifications</label>
+            <input id="qualifications" value={form.qualifications} onChange={handleChange} />
+            {formErrors.qualifications && (
+              <p className="error-text">{formErrors.qualifications}</p>
+            )}
           </div>
+
           <div className="form-group">
-            <label htmlFor="contactEmail">Contact Email:</label>
-            <input
-              type="email"
-              id="contactEmail"
-              placeholder="Email Address"
-              required
-              value={newStaff.contactEmail}
-              onChange={handleChange}
-              className={formErrors.contactEmail ? 'input-error' : ''}
-            />
+            <label htmlFor="contactEmail">Email</label>
+            <input id="contactEmail" value={form.contactEmail} onChange={handleChange} />
             {formErrors.contactEmail && <p className="error-text">{formErrors.contactEmail}</p>}
           </div>
+
           <div className="form-group">
-            <label htmlFor="contactPhone">Contact Phone:</label>
-            <input
-              type="tel"
-              id="contactPhone"
-              placeholder="Phone Number"
-              required
-              value={newStaff.contactPhone}
-              onChange={handleChange}
-              className={formErrors.contactPhone ? 'input-error' : ''}
-            />
+            <label htmlFor="contactPhone">Phone</label>
+            <input id="contactPhone" value={form.contactPhone} onChange={handleChange} />
             {formErrors.contactPhone && <p className="error-text">{formErrors.contactPhone}</p>}
           </div>
+
           <div className="form-group">
-            <label htmlFor="password">Password: {isEditing && <span style={{ color: '#888', fontStyle: 'italic' }}>(Leave blank to keep current)</span>}</label>
-            <input
-              type="password"
-              id="password"
-              placeholder={isEditing ? "Leave blank" : "Password"}
-              required={!isEditing}
-              value={newStaff.password}
+            <label htmlFor="resumeDocument">Resume (filename)</label>
+            <input type="file" id="resumeDocument" onChange={handleChange} />
+            {form.resumeDocument && (
+              <small style={{ color: "#666" }}>Selected: {form.resumeDocument}</small>
+            )}
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="assignedSubjects">Assigned Subjects (Ctrl+Click multi)</label>
+            <select
+              id="assignedSubjects"
+              multiple
+              value={form.assignedSubjects}
               onChange={handleChange}
-              className={formErrors.password ? 'input-error' : ''}
-            />
-            {formErrors.password && <p className="error-text">{formErrors.password}</p>}
-          </div>
-          
-          <div className="form-group">
-            <label htmlFor="assignedSubjects">Assigned Subjects (Hold Ctrl/Cmd to select multiple):</label>
-            <select
-                id="assignedSubjects"
-                multiple
-                value={newStaff.assignedSubjects}
-                onChange={handleChange}
             >
-                {uniqueSubjects.map(subject => (
-                    <option key={subject} value={subject}>{subject}</option>
-                ))}
-            </select>
-          </div>
-          <div className="form-group">
-            <label htmlFor="assignedClasses">Assigned Classes (Hold Ctrl/Cmd to select multiple):</label>
-            <select
-                id="assignedClasses"
-                multiple
-                value={newStaff.assignedClasses}
-                onChange={handleChange}
-            >
-                {uniqueClasses.map(cls => (
-                    <option key={cls} value={cls}>{cls}</option>
-                ))}
+              {uniqueSubjects.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
             </select>
           </div>
 
-          <div className="form-group full-width">
-            <label htmlFor="resumeDocument">Resume/CV (PDF/DOCX):</label>
-            <input
-              type="file"
-              id="resumeDocument"
+          <div className="form-group">
+            <label htmlFor="assignedClasses">Assigned Classes (Ctrl+Click multi)</label>
+            <select
+              id="assignedClasses"
+              multiple
+              value={form.assignedClasses}
               onChange={handleChange}
-              accept=".pdf,.doc,.docx"
-              className={formErrors.resumeDocument ? 'input-error' : ''}
-            />
-            {newStaff.resumeDocument && <p style={{ fontSize: '0.8em', color: '#555' }}>Selected: {newStaff.resumeDocument}</p>}
-            {formErrors.resumeDocument && <p className="error-text">{formErrors.resumeDocument}</p>}
+            >
+              {uniqueClasses.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
           </div>
-          
+
+          <div className="form-group">
+            <label htmlFor="password">
+              Password {isEditing ? "(leave blank to keep current)" : ""}
+            </label>
+            <input
+              type="password"
+              id="password"
+              value={form.password}
+              onChange={handleChange}
+              placeholder={isEditing ? "Leave blank" : "Set initial password"}
+            />
+            {formErrors.password && <p className="error-text">{formErrors.password}</p>}
+          </div>
+
           <div className="form-actions">
-            <button type="submit">{submitButtonText}</button>
-            <button type="button" onClick={clearSearchAndForm} className="secondary-button">Clear Form</button>
+            <button type="submit" disabled={submitting}>
+              {submitting ? "Saving..." : isEditing ? "Update Staff" : "Add Staff"}
+            </button>
+            <button type="button" onClick={clearForm} disabled={submitting}>
+              Clear Form
+            </button>
           </div>
         </form>
       </div>
+
+      {/* LIST */}
       <div className="sub-section">
-        <h3>Staff List ({filteredStaffs.length} Found)</h3>
+        <h2>Staff List</h2>
+
         <div className="filter-controls">
           <input
             type="text"
-            id="staffSearchFilter"
-            placeholder="Search by Name, ID, or Role"
+            placeholder="Search by name, ID, role, department..."
             value={searchTerm}
-            onChange={handleSearchChange}
+            onChange={(e) => setSearchTerm(e.target.value)}
           />
-          <button onClick={clearSearchAndForm} className="secondary-button">Clear Search & Form</button>
+          <button type="button" onClick={() => setSearchTerm("")}>
+            Clear Search
+          </button>
         </div>
+
         <div className="table-container">
           <table id="staffTable">
             <thead>
@@ -600,68 +573,47 @@ function StaffManagement() {
                 <th>Name</th>
                 <th>Role</th>
                 <th>Dept.</th>
-                <th>Gender</th>
                 <th>Phone</th>
                 <th>Email</th>
                 <th>Subjects</th>
                 <th>Classes</th>
-                <th>Resume</th>
                 <th>Actions</th>
               </tr>
             </thead>
+
             <tbody>
-              {filteredStaffs.length > 0 ? (
-                filteredStaffs.map(staff => (
-                <tr key={staff._id}>
-                    <td>{staff.staffId}</td>
-                    <td>{staff.surname} {staff.firstname}</td>
-                    <td>{staff.role}</td>
-                    <td>{staff.department}</td>
-                    <td>{staff.gender}</td>
-                    <td>{staff.contactPhone}</td>
-                    <td>{staff.contactEmail}</td>
-                    <td>{staff.assignedSubjects && staff.assignedSubjects.length > 0 ? staff.assignedSubjects.join(', ') : 'N/A'}</td>
-                    <td>{staff.assignedClasses && staff.assignedClasses.length > 0 ? staff.assignedClasses.join(', ') : 'N/A'}</td>
-                    <td>{staff.resumeDocument ? <a href="#" onClick={(e) => { e.preventDefault(); alert(`Simulating download of: ${staff.resumeDocument}`); }}>{staff.resumeDocument}</a> : 'N/A'}</td>
-                    <td className="action-buttons">
-                    <button
-                        className="action-btn edit-btn"
-                        onClick={() => editStaff(staff.staffId)}>
-                        Edit
-                    </button>
-                    <button
-                        className="action-btn delete-btn"
-                        onClick={() => deleteStaff(staff.staffId)}>
-                        Delete
-                    </button>
+              {filteredStaffs.length ? (
+                filteredStaffs.map((s) => (
+                  <tr key={s._id || s.staffId}>
+                    <td>{s.staffId}</td>
+                    <td>
+                      {s.surname} {s.firstname}
                     </td>
-                </tr>
+                    <td>{s.role}</td>
+                    <td>{s.department}</td>
+                    <td>{s.contactPhone}</td>
+                    <td>{s.contactEmail}</td>
+                    <td>{Array.isArray(s.assignedSubjects) ? s.assignedSubjects.join(", ") : ""}</td>
+                    <td>{Array.isArray(s.assignedClasses) ? s.assignedClasses.join(", ") : ""}</td>
+                    <td className="action-buttons">
+                      <button type="button" onClick={() => startEdit(s)} style={{ color: "green" }}>
+                        Edit
+                      </button>
+                      <button type="button" onClick={() => askDelete(s)} style={{ color: "red" }}>
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
                 ))
-            ) : (
+              ) : (
                 <tr>
-                <td colSpan="11">No staff found.</td>
+                  <td colSpan="9">No staff found.</td>
                 </tr>
-            )}
+              )}
             </tbody>
           </table>
         </div>
       </div>
-      {/* Existing Deletion Modal */}
-      <ConfirmModal
-        isOpen={isModalOpen}
-        message={`Are you sure you want to delete staff with ID: ${staffToDelete}?`}
-        onConfirm={confirmDelete}
-        onCancel={cancelDelete}
-      />
-      {/* ⭐️ NEW Registration Success Modal */}
-      {newlyRegisteredStaff && (
-          <ConfirmModal
-              isOpen={isRegSuccessModalOpen}
-              message={`Success! Staff ${newlyRegisteredStaff.firstname} ${newlyRegisteredStaff.surname} has been registered with Staff ID: ${newlyRegisteredStaff.staffId}.`}
-              onConfirm={closeRegSuccessModal}
-              onCancel={closeRegSuccessModal} // Both actions close the acknowledgment modal
-          />
-      )}
     </div>
   );
 }

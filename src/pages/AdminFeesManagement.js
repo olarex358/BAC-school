@@ -1,383 +1,446 @@
 // src/pages/AdminFeesManagement.js
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import useLocalStorage from '../hooks/useLocalStorage';
+import React, { useEffect, useMemo, useState } from "react";
+import { apiFetch } from "../api";
+import { useAuth } from "../context/AuthContext";
+import useLocalStorage from "../hooks/useLocalStorage";
+import { getCurrentAcademicPeriod } from "../utils/academicPeriod";
+import ConfirmModal from "../components/ConfirmModal";
+
+const initialFee = {
+  className: "",
+  feeName: "School Fees",
+  amount: "",
+  session: "",
+  term: "",
+  dueDate: "",
+  note: "",
+  status: "Active",
+};
 
 function AdminFeesManagement() {
-  const navigate = useNavigate();
-  const [loggedInAdmin, setLoggedInAdmin] = useState(null);
+  const { user } = useAuth();
 
-  // Update hooks to get data from the backend
-  const [feeRecords, setFeeRecords, loadingFees] = useLocalStorage('schoolPortalFeeRecords', [], 'http://localhost:5000/api/schoolPortalFeeRecords');
-  const [students] = useLocalStorage('schoolPortalStudents', [], 'http://localhost:5000/api/schoolPortalStudents');
+  // Optional: pull classes from students list (nice UX)
+  const [students] = useLocalStorage("schoolPortalStudents", []);
 
-  const [feeForm, setFeeForm] = useState({
-    feeType: '',
-    amount: '',
-    dueDate: '',
-    status: 'Unpaid',
-    paymentChannel: '',
-    notes: '',
-    isGeneralFee: true,
-    studentId: ''
+  const [fees, setFees] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(null);
+
+  const [searchTerm, setSearchTerm] = useState("");
+
+  const [form, setForm] = useState(() => {
+    const p = getCurrentAcademicPeriod();
+    return {
+      ...initialFee,
+      session: p.session,
+      term: p.term,
+    };
   });
-  const [formErrors, setFormErrors] = useState({});
-  const [message, setMessage] = useState(null);
+
   const [isEditing, setIsEditing] = useState(false);
-  const [editFeeRecordId, setEditFeeRecordId] = useState(null);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [editId, setEditId] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [formErrors, setFormErrors] = useState({});
 
-  const uniqueFeeTypes = ['Tuition Fee', 'Development Levy', 'Sport & Extra-curricular', 'Exam Fee', 'Other'];
-  const paymentChannels = ['Bank Transfer', 'Cash', 'Online Payment Gateway'];
+  // delete modal
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
+  // info modal
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [infoMsg, setInfoMsg] = useState("");
+
+  const uniqueClasses = useMemo(() => {
+    const list = (students || [])
+      .map((s) => s.studentClass || s.class || s.className)
+      .filter(Boolean);
+    return [...new Set(list)].sort();
+  }, [students]);
+
+  /* =========================
+     Load fees from backend
+  ========================= */
   useEffect(() => {
-    const user = JSON.parse(localStorage.getItem('loggedInUser'));
-    if (user && user.type === 'admin') {
-      setLoggedInAdmin(user);
-    } else {
-      navigate('/login');
-    }
-  }, [navigate]);
+    const loadFees = async () => {
+      setLoading(true);
+      setFetchError(null);
 
-  const validateForm = () => {
-    let errors = {};
-    if (!feeForm.feeType) errors.feeType = 'Fee type is required.';
-    if (!feeForm.amount || parseFloat(feeForm.amount) <= 0) errors.amount = 'Amount must be a positive number.';
-    if (!feeForm.dueDate) errors.dueDate = 'Due date is required.';
-    if (!feeForm.status) errors.status = 'Status is required.';
-    if (feeForm.status !== 'Unpaid' && !feeForm.paymentChannel) errors.paymentChannel = 'Payment channel is required if not unpaid.';
-    if (!feeForm.isGeneralFee && !feeForm.studentId) errors.studentId = 'Please select a student for individual fees.';
-    setFormErrors(errors);
-    return Object.keys(errors).length === 0;
+      try {
+        const res = await apiFetch("/api/schoolPortalFeeRecords");
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.message || `Failed to fetch fees (Status ${res.status})`);
+        }
+        const data = await res.json().catch(() => []);
+        setFees(Array.isArray(data) ? data : []);
+      } catch (e) {
+        setFetchError(e.message || "Failed to load fees");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadFees();
+  }, []);
+
+  /* =========================
+     Helpers
+  ========================= */
+  const validate = (data) => {
+    const errors = {};
+    if (!data.className.trim()) errors.className = "Class is required";
+    if (!data.feeName.trim()) errors.feeName = "Fee name is required";
+    if (!data.amount || Number(data.amount) <= 0) errors.amount = "Amount must be greater than 0";
+    if (!data.session.trim()) errors.session = "Session is required";
+    if (!data.term.trim()) errors.term = "Term is required";
+    return errors;
+  };
+
+  const resetForm = () => {
+    const p = getCurrentAcademicPeriod();
+    setForm({
+      ...initialFee,
+      session: p.session,
+      term: p.term,
+    });
+    setIsEditing(false);
+    setEditId(null);
+    setFormErrors({});
+  };
+
+  const showInfo = (msg) => {
+    setInfoMsg(msg);
+    setInfoOpen(true);
+  };
+
+  const startEdit = (fee) => {
+    setIsEditing(true);
+    setEditId(fee._id);
+    setForm({
+      className: fee.className || fee.class || "",
+      feeName: fee.feeName || fee.name || "School Fees",
+      amount: fee.amount ?? "",
+      session: fee.session || "",
+      term: fee.term || "",
+      dueDate: fee.dueDate || "",
+      note: fee.note || "",
+      status: fee.status || "Active",
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const askDelete = (fee) => {
+    setDeleteTarget(fee);
+    setDeleteOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget?._id) {
+      setDeleteOpen(false);
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const res = await apiFetch(`/api/schoolPortalFeeRecords/${deleteTarget._id}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Failed to delete fee");
+      }
+
+      setFees((prev) => prev.filter((f) => f._id !== deleteTarget._id));
+      showInfo("Fee record deleted successfully.");
+    } catch (e) {
+      alert(e.message || "Delete failed");
+    } finally {
+      setSubmitting(false);
+      setDeleteOpen(false);
+      setDeleteTarget(null);
+    }
   };
 
   const handleChange = (e) => {
-    const { id, value, type, checked } = e.target;
-    if (type === 'checkbox') {
-      setFeeForm(prev => ({
-        ...prev,
-        [id]: checked,
-        studentId: checked ? '' : prev.studentId
-      }));
-    } else {
-      setFeeForm(prev => ({ ...prev, [id]: value }));
-    }
-    setFormErrors(prev => ({ ...prev, [id]: '' }));
-    setMessage(null);
+    const { id, value } = e.target;
+    setForm((p) => ({ ...p, [id]: value }));
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setMessage(null);
-    if (!validateForm()) {
-      setMessage({ type: 'error', text: 'Please correct the errors in the form.' });
-      return;
-    }
-    const feeRecordToAddOrUpdate = {
-      ...feeForm,
-      amount: parseFloat(feeForm.amount),
-      timestamp: new Date().toISOString()
+    if (submitting) return;
+
+    const payload = {
+      className: form.className.trim(),
+      feeName: form.feeName.trim(),
+      amount: Number(form.amount),
+      session: form.session.trim(),
+      term: form.term.trim(),
+      dueDate: form.dueDate || "",
+      note: form.note || "",
+      status: form.status || "Active",
     };
+
+    const errors = validate(payload);
+    setFormErrors(errors);
+    if (Object.keys(errors).length) return;
+
+    setSubmitting(true);
     try {
       if (isEditing) {
-        const response = await fetch(`http://localhost:5000/api/schoolPortalFeeRecords/${editFeeRecordId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(feeRecordToAddOrUpdate),
+        const res = await apiFetch(`/api/schoolPortalFeeRecords/${editId}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
         });
-        if (response.ok) {
-          const updatedRecord = await response.json();
-          setFeeRecords(prevRecords =>
-            prevRecords.map(rec =>
-              rec._id === updatedRecord._id ? updatedRecord : rec
-            )
-          );
-          setMessage({ type: 'success', text: 'Fee record updated successfully!' });
-        } else {
-          const errorData = await response.json();
-          setMessage({ type: 'error', text: errorData.message || 'Failed to update fee record.' });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.message || "Failed to update fee");
         }
+
+        const updated = await res.json().catch(() => null);
+        if (updated?._id) {
+          setFees((prev) => prev.map((f) => (f._id === updated._id ? updated : f)));
+        } else {
+          // fallback refresh
+          const r = await apiFetch("/api/schoolPortalFeeRecords");
+          const list = await r.json().catch(() => []);
+          setFees(Array.isArray(list) ? list : []);
+        }
+
+        showInfo("Fee record updated successfully.");
+        resetForm();
       } else {
-        const response = await fetch('http://localhost:5000/api/schoolPortalFeeRecords', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(feeRecordToAddOrUpdate),
+        const res = await apiFetch("/api/schoolPortalFeeRecords", {
+          method: "POST",
+          body: JSON.stringify(payload),
         });
-        if (response.ok) {
-          const newRecord = await response.json();
-          setFeeRecords(prevRecords => [...prevRecords, newRecord]);
-          setMessage({ type: 'success', text: 'Fee record added successfully!' });
-        } else {
-          const errorData = await response.json();
-          setMessage({ type: 'error', text: errorData.message || 'Failed to add new fee record.' });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.message || "Failed to create fee");
         }
+
+        const created = await res.json().catch(() => null);
+        if (created?._id) setFees((prev) => [created, ...prev]);
+
+        showInfo("Fee record created successfully.");
+        resetForm();
       }
-    } catch (err) {
-      setMessage({ type: 'error', text: 'An unexpected error occurred. Please check your network connection.' });
+    } catch (e2) {
+      alert(e2.message || "Save failed");
+    } finally {
+      setSubmitting(false);
     }
-    
-    setFeeForm({
-      feeType: '',
-      amount: '',
-      dueDate: '',
-      status: 'Unpaid',
-      paymentChannel: '',
-      notes: '',
-      isGeneralFee: true,
-      studentId: ''
+  };
+
+  const filteredFees = useMemo(() => {
+    const t = searchTerm.trim().toLowerCase();
+    if (!t) return fees;
+
+    return fees.filter((f) => {
+      const cls = String(f.className || f.class || "").toLowerCase();
+      const name = String(f.feeName || f.name || "").toLowerCase();
+      const sess = String(f.session || "").toLowerCase();
+      const term = String(f.term || "").toLowerCase();
+      return cls.includes(t) || name.includes(t) || sess.includes(t) || term.includes(t);
     });
-    setIsEditing(false);
-    setEditFeeRecordId(null);
-    setFormErrors({});
-  };
+  }, [fees, searchTerm]);
 
-  const editFeeRecord = (idToEdit) => {
-    const record = feeRecords.find(rec => rec.id === idToEdit);
-    if (record) {
-      setFeeForm(record);
-      setIsEditing(true);
-      setEditFeeRecordId(record._id);
-      setMessage(null);
-      setFormErrors({});
-    }
-  };
+  /* =========================
+     UI
+  ========================= */
+  if (loading) return <div className="content-section">Loading fee records…</div>;
 
-  const deleteFeeRecord = async (idToDelete) => {
-    if (window.confirm('Are you sure you want to delete this fee record?')) {
-      const recordToDelete = feeRecords.find(rec => rec.id === idToDelete);
-      if (!recordToDelete) {
-        setMessage({ type: 'error', text: 'Record not found.' });
-        return;
-      }
-      try {
-        const response = await fetch(`http://localhost:5000/api/schoolPortalFeeRecords/${recordToDelete._id}`, {
-          method: 'DELETE',
-        });
-        if (response.ok) {
-          setFeeRecords(prevRecords => prevRecords.filter(rec => rec.id !== idToDelete));
-          setMessage({ type: 'success', text: 'Fee record deleted successfully!' });
-        } else {
-          const errorData = await response.json();
-          setMessage({ type: 'error', text: errorData.message || 'Failed to delete fee record.' });
-        }
-      } catch (err) {
-        setMessage({ type: 'error', text: 'An unexpected error occurred. Please check your network connection.' });
-      }
-    }
-  };
-
-  const clearForm = () => {
-    setFeeForm({
-      feeType: '',
-      amount: '',
-      dueDate: '',
-      status: 'Unpaid',
-      paymentChannel: '',
-      notes: '',
-      isGeneralFee: true,
-      studentId: ''
-    });
-    setIsEditing(false);
-    setEditFeeRecordId(null);
-    setFormErrors({});
-    setMessage(null);
-  };
-
-  const getStudentName = (admissionNo) => {
-    const student = students.find(s => s.admissionNo === admissionNo);
-    return student ? `${student.firstName} ${student.lastName} (${student.admissionNo})` : 'Unknown Student';
-  };
-
-  const filteredFeeRecords = feeRecords.filter(record => {
-    const matchesSearch = searchTerm ?
-      (record.feeType.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        record.notes.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (record.studentId && getStudentName(record.studentId).toLowerCase().includes(searchTerm.toLowerCase())))
-      : true;
-    return matchesSearch;
-  });
-
-  if (!loggedInAdmin) {
-    return <div className="content-section">Access Denied. Please log in as an Admin.</div>;
-  }
-
-  if (loadingFees) {
-    return <div className="content-section">Loading fee data...</div>;
+  if (fetchError) {
+    return (
+      <div
+        className="content-section"
+        style={{
+          color: "#b00020",
+          fontWeight: "bold",
+          padding: 20,
+          border: "1px solid #b00020",
+          borderRadius: 6,
+        }}
+      >
+        Error fetching data: {fetchError}
+      </div>
+    );
   }
 
   return (
     <div className="content-section">
-      <h1>Fee Management</h1>
+      <h1>Admin Fees Management</h1>
+      <p style={{ marginTop: -8, color: "#555" }}>
+        Logged in as: <b>{user?.username || "Admin"}</b>
+      </p>
+
+      {/* Info Modal */}
+      <ConfirmModal
+        isOpen={infoOpen}
+        message={infoMsg}
+        onConfirm={() => setInfoOpen(false)}
+        onCancel={() => setInfoOpen(false)}
+        isAlert={true}
+      />
+
+      {/* Delete Modal */}
+      <ConfirmModal
+        isOpen={deleteOpen}
+        message={
+          deleteTarget
+            ? `Delete fee record for ${deleteTarget.className || deleteTarget.class || "class"} (${deleteTarget.feeName || "Fee"})?`
+            : "Delete this fee record?"
+        }
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteOpen(false)}
+        isAlert={false}
+      />
+
+      {/* FORM */}
       <div className="sub-section">
-        <h2>{isEditing ? 'Edit Fee Record' : 'Add New Fee Record'}</h2>
-        {message && (
-          <div style={{ padding: '10px', marginBottom: '15px', borderRadius: '5px', color: 'white', backgroundColor: message.type === 'success' ? '#28a745' : '#dc3545' }}>
-            {message.text}
-          </div>
-        )}
+        <h2>{isEditing ? "Edit Fee" : "Create Fee"}</h2>
+
         <form onSubmit={handleSubmit}>
-          <div style={{ marginBottom: '10px', flex: '1 1 100%' }}>
-            <label style={{ marginRight: '15px' }}>Fee Scope:</label>
+          <div className="form-group">
+            <label htmlFor="className">Class</label>
             <input
-              type="checkbox"
-              id="isGeneralFee"
-              checked={feeForm.isGeneralFee}
+              id="className"
+              value={form.className}
               onChange={handleChange}
-              style={{ width: 'auto', marginRight: '5px' }}
+              placeholder="e.g. JSS1 A"
+              list="classList"
             />
-            <label htmlFor="isGeneralFee" style={{ display: 'inline' }}>General Fee (for all students)</label>
-          </div>
-          {!feeForm.isGeneralFee && (
-            <div style={{ marginBottom: '10px', flex: '1 1 calc(50% - 7.5px)' }}>
-              <label htmlFor="studentId" style={{ display: 'block', marginBottom: '5px' }}>Select Student:</label>
-              <select
-                id="studentId"
-                value={feeForm.studentId}
-                onChange={handleChange}
-                required={!feeForm.isGeneralFee}
-                style={{ borderColor: formErrors.studentId ? 'red' : '' }}
-              >
-                <option value="">-- Select Student --</option>
-                {students.map(s => (
-                  <option key={s.admissionNo} value={s.admissionNo}>{getStudentName(s.admissionNo)}</option>
-                ))}
-              </select>
-              {formErrors.studentId && <p style={{ color: 'red', fontSize: '0.8em' }}>{formErrors.studentId}</p>}
-            </div>
-          )}
-          <div style={{ marginBottom: '10px', flex: '1 1 calc(50% - 7.5px)' }}>
-            <label htmlFor="feeType" style={{ display: 'block', marginBottom: '5px' }}>Fee Type:</label>
-            <select
-              id="feeType"
-              value={feeForm.feeType}
-              onChange={handleChange}
-              required
-              style={{ borderColor: formErrors.feeType ? 'red' : '' }}
-            >
-              <option value="">-- Select Fee Type --</option>
-              {uniqueFeeTypes.map(type => (
-                <option key={type} value={type}>{type}</option>
+            <datalist id="classList">
+              {uniqueClasses.map((c) => (
+                <option key={c} value={c} />
               ))}
-            </select>
-            {formErrors.feeType && <p style={{ color: 'red', fontSize: '0.8em' }}>{formErrors.feeType}</p>}
+            </datalist>
+            {formErrors.className && <p className="error-text">{formErrors.className}</p>}
           </div>
-          <div style={{ marginBottom: '10px', flex: '1 1 calc(50% - 7.5px)' }}>
-            <label htmlFor="amount" style={{ display: 'block', marginBottom: '5px' }}>Amount (₦):</label>
+
+          <div className="form-group">
+            <label htmlFor="feeName">Fee Name</label>
+            <input id="feeName" value={form.feeName} onChange={handleChange} />
+            {formErrors.feeName && <p className="error-text">{formErrors.feeName}</p>}
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="amount">Amount</label>
             <input
-              type="number"
               id="amount"
-              value={feeForm.amount}
+              type="number"
+              value={form.amount}
               onChange={handleChange}
-              required
-              min="0.01"
-              step="0.01"
-              placeholder="e.g., 150000.00"
-              style={{ borderColor: formErrors.amount ? 'red' : '' }}
+              placeholder="e.g. 25000"
             />
-            {formErrors.amount && <p style={{ color: 'red', fontSize: '0.8em' }}>{formErrors.amount}</p>}
+            {formErrors.amount && <p className="error-text">{formErrors.amount}</p>}
           </div>
-          <div style={{ marginBottom: '10px', flex: '1 1 calc(50% - 7.5px)' }}>
-            <label htmlFor="dueDate" style={{ display: 'block', marginBottom: '5px' }}>Due Date:</label>
-            <input
-              type="date"
-              id="dueDate"
-              value={feeForm.dueDate}
-              onChange={handleChange}
-              required
-              style={{ borderColor: formErrors.dueDate ? 'red' : '' }}
-            />
-            {formErrors.dueDate && <p style={{ color: 'red', fontSize: '0.8em' }}>{formErrors.dueDate}</p>}
+
+          <div className="form-group">
+            <label htmlFor="session">Session</label>
+            <input id="session" value={form.session} onChange={handleChange} placeholder="2025/2026" />
+            {formErrors.session && <p className="error-text">{formErrors.session}</p>}
           </div>
-          <div style={{ marginBottom: '10px', flex: '1 1 calc(50% - 7.5px)' }}>
-            <label htmlFor="status" style={{ display: 'block', marginBottom: '5px' }}>Status:</label>
-            <select
-              id="status"
-              value={feeForm.status}
-              onChange={handleChange}
-              required
-              style={{ borderColor: formErrors.status ? 'red' : '' }}
-            >
-              <option value="Unpaid">Unpaid</option>
-              <option value="Partially Paid">Partially Paid</option>
-              <option value="Paid">Paid</option>
+
+          <div className="form-group">
+            <label htmlFor="term">Term</label>
+            <select id="term" value={form.term} onChange={handleChange}>
+              <option value="">Select Term</option>
+              <option value="First Term">First Term</option>
+              <option value="Second Term">Second Term</option>
+              <option value="Third Term">Third Term</option>
             </select>
-            {formErrors.status && <p style={{ color: 'red', fontSize: '0.8em' }}>{formErrors.status}</p>}
+            {formErrors.term && <p className="error-text">{formErrors.term}</p>}
           </div>
-          <div style={{ marginBottom: '10px', flex: '1 1 calc(50% - 7.5px)' }}>
-            <label htmlFor="paymentChannel" style={{ display: 'block', marginBottom: '5px' }}>Payment Channel (if paid/partially paid):</label>
-            <select
-              id="paymentChannel"
-              value={feeForm.paymentChannel}
-              onChange={handleChange}
-              required={feeForm.status !== 'Unpaid'}
-              style={{ borderColor: formErrors.paymentChannel ? 'red' : '' }}
-            >
-              <option value="">-- Select Channel --</option>
-              {paymentChannels.map(channel => (
-                <option key={channel} value={channel}>{channel}</option>
-              ))}
+
+          <div className="form-group">
+            <label htmlFor="dueDate">Due Date (optional)</label>
+            <input id="dueDate" type="date" value={form.dueDate} onChange={handleChange} />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="status">Status</label>
+            <select id="status" value={form.status} onChange={handleChange}>
+              <option value="Active">Active</option>
+              <option value="Inactive">Inactive</option>
             </select>
-            {formErrors.paymentChannel && <p style={{ color: 'red', fontSize: '0.8em' }}>{formErrors.paymentChannel}</p>}
           </div>
-          <div style={{ marginBottom: '10px', flex: '1 1 100%' }}>
-            <label htmlFor="notes" style={{ display: 'block', marginBottom: '5px' }}>Notes (Optional):</label>
-            <textarea
-              id="notes"
-              value={feeForm.notes}
-              onChange={handleChange}
-              placeholder="Add any relevant notes about the fee or payment."
-              rows="3"
-            ></textarea>
+
+          <div className="form-group">
+            <label htmlFor="note">Note (optional)</label>
+            <input id="note" value={form.note} onChange={handleChange} placeholder="Any note…" />
           </div>
-          <button type="submit" style={{ flex: '1 1 calc(50% - 7.5px)' }}>{isEditing ? 'Update Fee Record' : 'Add Fee Record'}</button>
-          <button type="button" onClick={clearForm} style={{ flex: '1 1 calc(50% - 7.5px)', backgroundColor: '#6c757d', borderColor: '#6c757d' }}>Clear Form</button>
+
+          <div className="form-actions">
+            <button type="submit" disabled={submitting}>
+              {submitting ? "Saving..." : isEditing ? "Update Fee" : "Create Fee"}
+            </button>
+            <button type="button" onClick={resetForm} disabled={submitting}>
+              Clear Form
+            </button>
+          </div>
         </form>
       </div>
+
+      {/* LIST */}
       <div className="sub-section">
-        <h2>All Fee Records</h2>
-        <input
-          type="text"
-          placeholder="Search by Fee Type or Student ID"
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          style={{ width: '100%', padding: '8px', marginBottom: '15px' }}
-        />
+        <h2>Fee Records</h2>
+
+        <div className="filter-controls">
+          <input
+            type="text"
+            placeholder="Search by class, fee name, session, term..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+          <button type="button" onClick={() => setSearchTerm("")}>
+            Clear Search
+          </button>
+        </div>
+
         <div className="table-container">
           <table>
             <thead>
               <tr>
-                <th>Scope</th>
-                <th>Student (ID)</th>
-                <th>Fee Type</th>
+                <th>Class</th>
+                <th>Fee</th>
                 <th>Amount</th>
-                <th>Due Date</th>
+                <th>Session</th>
+                <th>Term</th>
                 <th>Status</th>
-                <th>Channel</th>
-                <th>Notes</th>
+                <th>Due</th>
                 <th>Actions</th>
               </tr>
             </thead>
+
             <tbody>
-              {filteredFeeRecords.length > 0 ? (
-                filteredFeeRecords.map(record => (
-                  <tr key={record._id}>
-                    <td>{record.isGeneralFee ? 'General' : 'Individual'}</td>
-                    <td>{record.isGeneralFee ? 'All Students' : getStudentName(record.studentId)}</td>
-                    <td>{record.feeType}</td>
-                    <td>₦{record.amount.toLocaleString()}</td>
-                    <td>{record.dueDate}</td>
-                    <td style={{ color: record.status === 'Paid' ? 'green' : record.status === 'Partially Paid' ? 'orange' : 'red' }}>{record.status}</td>
-                    <td>{record.paymentChannel || 'N/A'}</td>
-                    <td>{record.notes || 'N/A'}</td>
-                    <td>
-                      <button className="action-btn edit-btn" onClick={() => editFeeRecord(record.id)}>Edit</button>
-                      <button className="action-btn delete-btn" onClick={() => deleteFeeRecord(record.id)}>Delete</button>
+              {filteredFees.length ? (
+                filteredFees.map((f) => (
+                  <tr key={f._id}>
+                    <td>{f.className || f.class}</td>
+                    <td>{f.feeName || f.name}</td>
+                    <td>{Number(f.amount || 0).toLocaleString()}</td>
+                    <td>{f.session}</td>
+                    <td>{f.term}</td>
+                    <td>{f.status || "Active"}</td>
+                    <td>{f.dueDate ? String(f.dueDate).slice(0, 10) : "-"}</td>
+                    <td className="action-buttons">
+                      <button type="button" onClick={() => startEdit(f)}>
+                        Edit
+                      </button>
+                      <button type="button" onClick={() => askDelete(f)}>
+                        Delete
+                      </button>
                     </td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan="9">No fee records found.</td>
+                  <td colSpan="8">No fee records found.</td>
                 </tr>
               )}
             </tbody>
