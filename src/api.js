@@ -6,29 +6,26 @@ const API_BASE =
 /**
  * apiFetch()
  * - Attaches Authorization: Bearer <authToken>
- * - Matches backend middleware: req.headers.authorization?.split(" ")[1]
  * - Uses Render base URL by default
  */
 export async function apiFetch(path, options = {}) {
-  const token = localStorage.getItem("authToken"); // ✅ FIXED KEY
+  const token = localStorage.getItem("authToken");
 
-  // Endpoints that do NOT require auth header
+  // ONLY these are truly public (no token):
   const isPublic =
     path === "/api/login" ||
-    path.startsWith("/api/setup") ||
-    path.startsWith("/api/activate-account");
+    path.startsWith("/api/setup"); // setup + setup/status
 
   const headers = {
     "Content-Type": "application/json",
     ...(options.headers || {}),
   };
 
-  // Attach token for protected routes only
+  // ✅ Attach token for everything else (including /api/activate-account)
   if (!isPublic && token) {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  // Support full URLs too (safety)
   const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
 
   return fetch(url, {

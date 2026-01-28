@@ -1,58 +1,93 @@
 import React from "react";
-import { Navigate } from "react-router-dom";
+import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
-const ProtectedRoute = ({ children, allowedTypes = [] }) => {
-  const { token, user } = useAuth();
+const normalize = (v) => String(v || "").trim().toLowerCase();
 
-  /* =========================
-     1️⃣ Not logged in
-  ========================= */
+const normalizeType = (user) => {
+  let t = normalize(user?.type) || normalize(user?.role);
+
+  // Normalize common variants
+  if (t === "super admin") t = "admin";
+  if (t === "admin") t = "admin";
+  if (t === "class teacher") t = "staff";
+  if (t === "teacher") t = "staff";
+  if (t === "student") t = "student";
+  if (t === "accountant") t = "accountant";
+
+  return t;
+};
+
+const hasPermissions = (user, requiredPermissions = []) => {
+  if (!requiredPermissions || requiredPermissions.length === 0) return true;
+
+  const perms = new Set(
+    (Array.isArray(user?.extraPermissions) ? user.extraPermissions : [])
+      .map(normalize)
+      .filter(Boolean)
+  );
+
+  // Admin override: if you want admin to bypass permissions, keep this true.
+  // If you want strict permission-based admin, remove this block.
+  const type = normalizeType(user);
+  if (type === "admin") return true;
+
+  return requiredPermissions.every((p) => perms.has(normalize(p)));
+};
+
+const ProtectedRoute = ({
+  children,
+  allowedTypes = [],
+  allowedRoles = [],
+  requiredPermissions = [],
+}) => {
+  const { token, user } = useAuth();
+  const location = useLocation();
+
+  // 1) Not logged in
   if (!token || !user) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
 
-  /* =========================
-     2️⃣ Force account activation
-  ========================= */
-  if (user.needsActivation) {
+  // 2) Activation gate (handles both patterns safely)
+  const needsActivation =
+    user?.needsActivation === true ||
+    user?.isActivated === false ||
+    user?.activated === false;
+
+  if (needsActivation) {
     return <Navigate to="/activate-account" replace />;
   }
 
-  /* =========================
-     3️⃣ Normalize user role/type
-  ========================= */
-  let userType =
-    user.type?.toLowerCase() ||
-    user.role?.toLowerCase() ||
-    "";
+  // 3) Type check
+  const userType = normalizeType(user);
 
-  // Normalize known variants
-  if (userType === "super admin") userType = "admin";
-  if (userType === "class teacher") userType = "staff";
-
-  /* =========================
-     4️⃣ Role access check
-     (ADMIN OVERRIDE FIX)
-  ========================= */
   if (allowedTypes.length > 0) {
-    // ✅ Admin override: admin can access all admin routes
-    if (userType === "admin" && allowedTypes.includes("admin")) {
-      return children;
-    }
-
-    if (!allowedTypes.includes(userType)) {
-      console.warn(
-        "⛔ ProtectedRoute blocked access:",
-        { userType, allowedTypes }
-      );
+    const allowed = allowedTypes.map(normalize);
+    if (!allowed.includes(userType)) {
+      console.warn("⛔ ProtectedRoute blocked by type:", { userType, allowedTypes });
       return <Navigate to="/" replace />;
     }
   }
 
-  /* =========================
-     5️⃣ Access granted
-  ========================= */
+  // 4) Role check (optional)
+  if (allowedRoles.length > 0) {
+    const role = String(user?.role || "").trim();
+    if (!allowedRoles.includes(role)) {
+      console.warn("⛔ ProtectedRoute blocked by role:", { role, allowedRoles });
+      return <Navigate to="/" replace />;
+    }
+  }
+
+  // 5) Permission check (new)
+  if (!hasPermissions(user, requiredPermissions)) {
+    console.warn("⛔ ProtectedRoute blocked by permissions:", {
+      requiredPermissions,
+      userPermissions: user?.extraPermissions,
+    });
+    return <Navigate to="/" replace />;
+  }
+
   return children;
 };
 
