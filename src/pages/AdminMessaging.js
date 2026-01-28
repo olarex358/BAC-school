@@ -1,200 +1,238 @@
-// src/pages/AdminMessaging.js
-import React, { useState, useEffect } from 'react';
-import useLocalStorage from '../hooks/useLocalStorage';
-import { useNavigate } from 'react-router-dom';
-import ConfirmModal from '../components/ConfirmModal';
+import React, { useEffect, useMemo, useState } from "react";
+import { apiFetch } from "../api";
+import { useAuth } from "../context/AuthContext";
 
+const initialMsg = {
+  title: "",
+  body: "",
+  audience: "all", // all | students | staff | parents
+  priority: "normal", // normal | urgent
+};
 
 function AdminMessaging() {
-  const navigate = useNavigate();
-  const [loggedInAdmin, setLoggedInAdmin] = useState(null);
+  const { user } = useAuth();
 
-  const [students] = useLocalStorage('schoolPortalStudents', [], 'http://localhost:5000/api/schoolPortalStudents');
-  const [staffs] = useLocalStorage('schoolPortalStaff', [], 'http://localhost:5000/api/schoolPortalStaff');
-  const [adminMessages, setAdminMessages, loadingMessages] = useLocalStorage('schoolPortalAdminMessages', [], 'http://localhost:5000/api/schoolPortalAdminMessages');
+  const [messages, setMessages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
 
-  const [recipientType, setRecipientType] = useState('allStudents');
-  const [selectedRecipientId, setSelectedRecipientId] = useState('');
-  const [messageSubject, setMessageSubject] = useState('');
-  const [messageBody, setMessageBody] = useState('');
-  const [formErrors, setFormErrors] = useState({});
+  const [form, setForm] = useState(initialMsg);
+  const [submitting, setSubmitting] = useState(false);
+  const [editingId, setEditingId] = useState(null);
 
-  // Modal State
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalMessage, setModalMessage] = useState('');
-  const [isModalAlert, setIsModalAlert] = useState(false);
-  const [modalAction, setModalAction] = useState(() => {});
-
-  const showAlert = (msg, action = () => {}) => {
-    setModalMessage(msg);
-    setIsModalAlert(true);
-    setModalAction(() => action);
-    setIsModalOpen(true);
-  };
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
-    const user = JSON.parse(localStorage.getItem('loggedInUser'));
-    if (user && user.type === 'admin') {
-      setLoggedInAdmin(user);
-    } else {
-      navigate('/login');
-    }
-  }, [navigate]);
+    const load = async () => {
+      setLoading(true);
+      setErr(null);
+      try {
+        const res = await apiFetch("/api/schoolPortalAdminMessages");
+        if (!res.ok) {
+          const e = await res.json().catch(() => ({}));
+          throw new Error(e.message || `Failed to load messages (${res.status})`);
+        }
+        const data = await res.json().catch(() => []);
+        setMessages(Array.isArray(data) ? data : []);
+      } catch (e) {
+        setErr(e.message || "Failed to load messages");
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+  }, []);
 
-  const validateForm = () => {
-    let errors = {};
-    if (!messageSubject.trim()) {
-      errors.messageSubject = 'Subject cannot be empty.';
-    }
-    if (!messageBody.trim()) {
-      errors.messageBody = 'Message body cannot be empty.';
-    }
-    if (recipientType === 'individualStudent' && !selectedRecipientId) {
-      errors.selectedRecipientId = 'Please select a student.';
-    }
-    if (recipientType === 'individualStaff' && !selectedRecipientId) {
-      errors.selectedRecipientId = 'Please select a staff member.';
-    }
-    setFormErrors(errors);
-    return Object.keys(errors).length === 0;
+  const filtered = useMemo(() => {
+    const t = search.trim().toLowerCase();
+    if (!t) return messages;
+    return messages.filter((m) => {
+      const title = String(m.title || "").toLowerCase();
+      const body = String(m.body || "").toLowerCase();
+      const aud = String(m.audience || "").toLowerCase();
+      return title.includes(t) || body.includes(t) || aud.includes(t);
+    });
+  }, [messages, search]);
+
+  const onChange = (e) => {
+    const { id, value } = e.target;
+    setForm((p) => ({ ...p, [id]: value }));
   };
 
-  const handleSendMessage = async (e) => {
+  const reset = () => {
+    setForm(initialMsg);
+    setEditingId(null);
+  };
+
+  const startEdit = (m) => {
+    setEditingId(m._id);
+    setForm({
+      title: m.title || "",
+      body: m.body || "",
+      audience: m.audience || "all",
+      priority: m.priority || "normal",
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const remove = async (m) => {
+    if (!window.confirm("Delete this message?")) return;
+    try {
+      const res = await apiFetch(`/api/schoolPortalAdminMessages/${m._id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        throw new Error(e.message || "Delete failed");
+      }
+      setMessages((prev) => prev.filter((x) => x._id !== m._id));
+    } catch (e) {
+      alert(e.message || "Delete failed");
+    }
+  };
+
+  const submit = async (e) => {
     e.preventDefault();
-    if (!validateForm()) {
-      showAlert('Please correct the errors in the form.');
+    if (submitting) return;
+
+    if (!form.title.trim() || !form.body.trim()) {
+      alert("Title and Body are required");
       return;
     }
-    const newMessage = {
-      sender: loggedInAdmin ? loggedInAdmin.username : 'Admin',
-      subject: messageSubject,
-      body: messageBody,
-      timestamp: new Date().toISOString(),
-      recipientType: recipientType,
-      recipientId: selectedRecipientId || null,
-      isRead: false,
+
+    const payload = {
+      title: form.title.trim(),
+      body: form.body.trim(),
+      audience: form.audience,
+      priority: form.priority,
+      createdBy: user?.username || "admin",
+      createdAt: new Date().toISOString(),
     };
-    
+
+    setSubmitting(true);
     try {
-      const response = await fetch('http://localhost:5000/api/schoolPortalAdminMessages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newMessage),
-      });
-
-      if (response.ok) {
-        const createdMessage = await response.json();
-        setAdminMessages(prevMessages => [...prevMessages, createdMessage]);
-        
-        showAlert(`Message sent to ${recipientType.replace('individual', '').replace('all', '')} successfully!`);
+      if (editingId) {
+        const res = await apiFetch(`/api/schoolPortalAdminMessages/${editingId}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const e2 = await res.json().catch(() => ({}));
+          throw new Error(e2.message || "Update failed");
+        }
+        const updated = await res.json().catch(() => null);
+        setMessages((prev) => prev.map((x) => (x._id === updated._id ? updated : x)));
+        reset();
       } else {
-        const errorData = await response.json();
-        showAlert(errorData.message || 'Failed to send message.');
+        const res = await apiFetch("/api/schoolPortalAdminMessages", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const e2 = await res.json().catch(() => ({}));
+          throw new Error(e2.message || "Send failed");
+        }
+        const created = await res.json().catch(() => null);
+        if (created?._id) setMessages((prev) => [created, ...prev]);
+        reset();
       }
-    } catch (err) {
-      showAlert('An unexpected error occurred. Please check your network connection.');
+    } catch (e3) {
+      alert(e3.message || "Save failed");
+    } finally {
+      setSubmitting(false);
     }
-
-    setSelectedRecipientId('');
-    setMessageSubject('');
-    setMessageBody('');
-    setFormErrors({});
   };
 
-  const getRecipientOptions = () => {
-    if (recipientType === 'individualStudent') {
-      return students.map(s => ({ id: s.admissionNo, name: `${s.firstName} ${s.lastName} (${s.admissionNo})` }));
-    } else if (recipientType === 'individualStaff') {
-      return staffs.map(s => ({ id: s.staffId, name: `${s.firstname} ${s.surname} (${s.staffId})` }));
-    }
-    return [];
-  };
-
-  if (!loggedInAdmin) {
-    return <div className="content-section">Access Denied. Please log in as an Admin.</div>;
-  }
-
-  if (loadingMessages) {
-    return <div className="content-section">Loading messages...</div>;
-  }
+  if (loading) return <div className="content-section">Loading messages…</div>;
+  if (err) return <div className="content-section" style={{ color: "red" }}>{err}</div>;
 
   return (
     <div className="content-section">
-      <ConfirmModal
-        isOpen={isModalOpen}
-        message={modalMessage}
-        onConfirm={() => setIsModalOpen(false)}
-        isAlert={isModalAlert}
-      />
       <h1>Admin Messaging</h1>
-      <p>Compose and send internal messages to students and staff.</p>
+
       <div className="sub-section">
-        <h2>Compose New Message</h2>
-        <form onSubmit={handleSendMessage} className="messaging-form">
-          <div className="form-group form-group-full">
-            <label htmlFor="recipientType" className="form-label">Send To:</label>
-            <select
-              id="recipientType"
-              value={recipientType}
-              onChange={(e) => { setSelectedRecipientId(''); setRecipientType(e.target.value); setFormErrors({}); }}
-              className="form-input"
-            >
-              <option value="allStudents">All Students</option>
-              <option value="individualStudent">Individual Student</option>
-              <option value="allStaff">All Staff</option>
-              <option value="individualStaff">Individual Staff</option>
+        <h2>{editingId ? "Edit Message" : "Create Message"}</h2>
+
+        <form onSubmit={submit} style={{ display: "grid", gap: 10, maxWidth: 800 }}>
+          <input id="title" value={form.title} onChange={onChange} placeholder="Title" />
+          <textarea
+            id="body"
+            value={form.body}
+            onChange={onChange}
+            placeholder="Message body..."
+            rows={5}
+          />
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <select id="audience" value={form.audience} onChange={onChange}>
+              <option value="all">All</option>
+              <option value="students">Students</option>
+              <option value="staff">Staff</option>
+              <option value="parents">Parents</option>
             </select>
-          </div>
-          {(recipientType === 'individualStudent' || recipientType === 'individualStaff') && (
-            <div className="form-group form-group-full">
-              <label htmlFor="selectedRecipientId" className="form-label">Select Recipient:</label>
-              <select
-                id="selectedRecipientId"
-                value={selectedRecipientId}
-                onChange={(e) => { setSelectedRecipientId(e.target.value); setFormErrors(prev => ({ ...prev, selectedRecipientId: '' })); }}
-                className={`form-input ${formErrors.selectedRecipientId ? 'form-input-error' : ''}`}
-              >
-                <option value="">-- Select --</option>
-                {getRecipientOptions().map(opt => (
-                  <option key={opt.id} value={opt.id}>{opt.name}</option>
-                ))}
-              </select>
-              {formErrors.selectedRecipientId && <p className="error-message">{formErrors.selectedRecipientId}</p>}
-            </div>
-          )}
-          <div className="form-group form-group-full">
-            <label htmlFor="messageSubject" className="form-label">Subject:</label>
-            <input
-              type="text"
-              id="messageSubject"
-              value={messageSubject}
-              onChange={(e) => { setMessageSubject(e.target.value); setFormErrors(prev => ({ ...prev, messageSubject: '' })); }}
-              className={`form-input ${formErrors.messageSubject ? 'form-input-error' : ''}`}
-              required
-            />
-            {formErrors.messageSubject && <p className="error-message">{formErrors.messageSubject}</p>}
-          </div>
-          <div className="form-group form-group-full">
-            <label htmlFor="messageBody" className="form-label">Message:</label>
-            <textarea
-              id="messageBody"
-              value={messageBody}
-              onChange={(e) => { setMessageBody(e.target.value); setFormErrors(prev => ({ ...prev, messageBody: '' })); }}
-              rows="5"
-              className={`form-input ${formErrors.messageBody ? 'form-input-error' : ''}`}
-              required
-            ></textarea>
-            {formErrors.messageBody && <p className="error-message">{formErrors.messageBody}</p>}
-          </div>
-          <div className="form-actions form-group-full">
-            <button type="submit" className="form-submit-btn">
-              Send Message
+            <select id="priority" value={form.priority} onChange={onChange}>
+              <option value="normal">Normal</option>
+              <option value="urgent">Urgent</option>
+            </select>
+
+            <button type="submit" disabled={submitting}>
+              {submitting ? "Saving..." : editingId ? "Update" : "Send"}
+            </button>
+            <button type="button" onClick={reset} style={{ background: "#6c757d" }}>
+              Clear
             </button>
           </div>
         </form>
       </div>
+
+      <div className="sub-section">
+        <h2>Sent Messages</h2>
+
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search title/body/audience..."
+          style={{ width: "100%", padding: 8, marginBottom: 10 }}
+        />
+
+        <div className="table-container">
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th style={th}>Title</th>
+                <th style={th}>Audience</th>
+                <th style={th}>Priority</th>
+                <th style={th}>Created</th>
+                <th style={th}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.length ? (
+                filtered.map((m) => (
+                  <tr key={m._id}>
+                    <td style={td}><b>{m.title}</b><br />{String(m.body || "").slice(0, 60)}...</td>
+                    <td style={td}>{m.audience || "all"}</td>
+                    <td style={td}>{m.priority || "normal"}</td>
+                    <td style={td}>{m.createdAt ? String(m.createdAt).slice(0, 10) : "-"}</td>
+                    <td style={td}>
+                      <button onClick={() => startEdit(m)}>Edit</button>{" "}
+                      <button onClick={() => remove(m)} style={{ background: "#dc2626" }}>
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr><td style={td} colSpan="5">No messages.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }
+
+const th = { border: "1px solid #ddd", padding: 8, background: "#f2f2f2", textAlign: "left" };
+const td = { border: "1px solid #ddd", padding: 8 };
 
 export default AdminMessaging;

@@ -1,462 +1,448 @@
 // src/pages/AdminCertificationManagement.js
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import useLocalStorage from '../hooks/useLocalStorage';
-import ConfirmModal from '../components/ConfirmModal';
+import React, { useEffect, useMemo, useState } from "react";
+import { apiFetch } from "../api";
+import { useAuth } from "../context/AuthContext";
+import useLocalStorage from "../hooks/useLocalStorage";
+import ConfirmModal from "../components/ConfirmModal";
 
+const API_PATH = "/api/schoolPortalCertifications"; // backend-try (may not exist yet)
+const LOCAL_KEY = "schoolPortalCertifications";     // safe fallback storage
+
+const initialCert = {
+  title: "",
+  studentAdmissionNo: "",
+  studentName: "",
+  className: "",
+  type: "Certificate", // Certificate | Award | Testimonial
+  description: "",
+  issuedDate: "",
+  status: "Issued", // Issued | Pending | Revoked
+  fileUrl: "", // optional link to PDF/image
+};
 
 function AdminCertificationManagement() {
-  const navigate = useNavigate();
-  const [loggedInAdmin, setLoggedInAdmin] = useState(null);
+  const { user } = useAuth();
 
-  // Data from localStorage
-  const [certificationResults, setCertificationResults] = useLocalStorage('schoolPortalCertificationResults', [], 'http://localhost:5000/api/schoolPortalCertificationResults');
-  const [students] = useLocalStorage('schoolPortalStudents', [], 'http://localhost:5000/api/schoolPortalStudents');
-  const [subjects] = useLocalStorage('schoolPortalSubjects', [], 'http://localhost:5000/api/schoolPortalSubjects');
+  // students list (for dropdown + auto fill)
+  const [studentsLocal] = useLocalStorage("schoolPortalStudents", []);
 
-  // Form states
-  const [resultForm, setResultForm] = useState({
-    studentAdmissionNo: '',
-    subjectCode: '',
-    date: '',
-    objScore: '',
-    theoryScore: '',
-    pracScore: '',
-    totalScore: 0,
-    grade: '',
-    qualified: false,
-  });
+  // local fallback store
+  const [localCerts, setLocalCerts] = useLocalStorage(LOCAL_KEY, []);
 
-  const [formErrors, setFormErrors] = useState({});
-  const [message, setMessage] = useState(null);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editResultId, setEditResultId] = useState(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  
-  // State for table sorting
-  const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'descending' });
+  // active data store (api or local)
+  const [mode, setMode] = useState("loading"); // loading | api | local
+  const [certs, setCerts] = useState([]);
 
-  // Modal State
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalMessage, setModalMessage] = useState('');
-  const [modalAction, setModalAction] = useState(() => {});
-  const [isModalAlert, setIsModalAlert] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
 
-  // Helper functions for modal control
-  const showConfirm = (msg, action) => {
-    setModalMessage(msg);
-    setModalAction(() => action);
-    setIsModalAlert(false);
-    setIsModalOpen(true);
+  const [form, setForm] = useState(initialCert);
+  const [editingId, setEditingId] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const [search, setSearch] = useState("");
+
+  // modals
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [infoMsg, setInfoMsg] = useState("");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+
+  const showInfo = (msg) => {
+    setInfoMsg(msg);
+    setInfoOpen(true);
   };
 
-  const showAlert = (msg, action = () => {}) => {
-    setModalMessage(msg);
-    setModalAction(() => action);
-    setIsModalAlert(true);
-    setIsModalOpen(true);
+  const reset = () => {
+    setForm(initialCert);
+    setEditingId(null);
   };
 
-  // Protect the route
+  // build student dropdown
+  const studentOptions = useMemo(() => {
+    const arr = Array.isArray(studentsLocal) ? studentsLocal : [];
+    return arr
+      .map((s) => ({
+        admissionNo: s.admissionNo,
+        name:
+          s.fullName ||
+          `${s.firstName || ""} ${s.lastName || ""}`.trim() ||
+          s.name ||
+          s.admissionNo,
+        className: s.studentClass || s.className || s.class || "",
+      }))
+      .filter((s) => s.admissionNo);
+  }, [studentsLocal]);
+
+  /* =========================
+     Load certifications (API try, else local fallback)
+  ========================= */
   useEffect(() => {
-    const user = JSON.parse(localStorage.getItem('loggedInUser'));
-    if (user && user.type === 'admin') {
-      setLoggedInAdmin(user);
-    } else {
-      navigate('/login');
-    }
-  }, [navigate]);
+    const load = async () => {
+      setMode("loading");
+      setLoading(true);
+      setErr(null);
 
-  // Helper functions
-  const getStudentName = (admissionNo) => {
-    const student = students.find(s => s.admissionNo === admissionNo);
-    return student ? `${student.firstName} ${student.lastName}` : 'Unknown Student';
-  };
+      try {
+        const res = await apiFetch(API_PATH);
 
-  const getSubjectName = (subjectCode) => {
-    const subject = subjects.find(s => s.subjectCode === subjectCode);
-    return subject ? subject.subjectName : subjectCode;
-  };
-  
-  // Custom grading and qualification logic
-  const calculateGradeAndQualification = (total) => {
-    let grade = '';
-    let qualified = false;
-    const scaledScore = (total / 100) * 9;
+        // If backend doesn't support the entity, fallback to local safely
+        if (!res.ok) {
+          setCerts(localCerts);
+          setMode("local");
+          setLoading(false);
+          return;
+        }
 
-    if (scaledScore >= 8.0) {
-      grade = 'Zenith';
-      qualified = true;
-    } else if (scaledScore >= 6.0) {
-      grade = 'Legends';
-      qualified = true;
-    } else if (scaledScore >= 4.0) {
-      grade = 'Economy';
-      qualified = true;
-    } else {
-      grade = 'Not Qualified';
-      qualified = false;
-    }
-    return { grade, qualified };
-  };
+        const data = await res.json().catch(() => []);
+        setCerts(Array.isArray(data) ? data : []);
+        setMode("api");
+      } catch {
+        setCerts(localCerts);
+        setMode("local");
+      } finally {
+        setLoading(false);
+      }
+    };
 
-  const validateForm = () => {
-    let errors = {};
-    if (!resultForm.studentAdmissionNo) errors.studentAdmissionNo = 'Student is required.';
-    if (!resultForm.subjectCode) errors.subjectCode = 'Subject is required.';
-    if (!resultForm.date) errors.date = 'Date is required.';
-    
-    const objScore = parseFloat(resultForm.objScore);
-    const theoryScore = parseFloat(resultForm.theoryScore);
-    const pracScore = parseFloat(resultForm.pracScore);
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    if (isNaN(objScore) || objScore < 0 || objScore > 100) errors.objScore = 'Score must be between 0 and 100.';
-    if (isNaN(theoryScore) || theoryScore < 0 || theoryScore > 100) errors.theoryScore = 'Score must be between 0 and 100.';
-    if (isNaN(pracScore) || pracScore < 0 || pracScore > 100) errors.pracScore = 'Score must be between 0 and 100.';
+  // keep in sync when in local mode
+  useEffect(() => {
+    if (mode === "local") setCerts(localCerts);
+  }, [localCerts, mode]);
 
-    setFormErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
+  /* =========================
+     Filtering
+  ========================= */
+  const filtered = useMemo(() => {
+    const t = search.trim().toLowerCase();
+    if (!t) return certs;
 
-  const handleChange = (e) => {
+    return certs.filter((c) => {
+      const blob = [
+        c.title,
+        c.studentAdmissionNo,
+        c.studentName,
+        c.className,
+        c.type,
+        c.status,
+      ]
+        .map((v) => String(v || "").toLowerCase())
+        .join(" ");
+      return blob.includes(t);
+    });
+  }, [certs, search]);
+
+  /* =========================
+     Form handlers
+  ========================= */
+  const onChange = (e) => {
     const { id, value } = e.target;
-    setResultForm(prev => ({ ...prev, [id]: value }));
-    setFormErrors(prev => ({ ...prev, [id]: '' }));
-    setMessage(null);
-  };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setMessage(null);
-
-    if (!validateForm()) {
-      showAlert('Please correct the errors in the form.');
+    // If selecting student admissionNo, auto-fill studentName/className
+    if (id === "studentAdmissionNo") {
+      const match = studentOptions.find((s) => s.admissionNo === value);
+      setForm((p) => ({
+        ...p,
+        studentAdmissionNo: value,
+        studentName: match?.name || "",
+        className: match?.className || "",
+      }));
       return;
     }
-    
-    const totalScore = parseFloat(resultForm.objScore) + parseFloat(resultForm.theoryScore) + parseFloat(resultForm.pracScore);
-    const { grade, qualified } = calculateGradeAndQualification(totalScore);
 
-    const resultToAddOrUpdate = {
-      ...resultForm,
-      totalScore: totalScore,
-      grade: grade,
-      qualified: qualified,
-      timestamp: new Date().toISOString(),
+    setForm((p) => ({ ...p, [id]: value }));
+  };
+
+  const startEdit = (c) => {
+    setEditingId(c._id || c.id);
+    setForm({
+      title: c.title || "",
+      studentAdmissionNo: c.studentAdmissionNo || "",
+      studentName: c.studentName || "",
+      className: c.className || "",
+      type: c.type || "Certificate",
+      description: c.description || "",
+      issuedDate: c.issuedDate ? String(c.issuedDate).slice(0, 10) : "",
+      status: c.status || "Issued",
+      fileUrl: c.fileUrl || "",
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const askDelete = (c) => {
+    setDeleteTarget(c);
+    setDeleteOpen(true);
+  };
+
+  /* =========================
+     Save (API or Local)
+  ========================= */
+  const save = async (e) => {
+    e.preventDefault();
+    if (submitting) return;
+
+    if (!form.title.trim()) return alert("Title is required");
+    if (!form.studentAdmissionNo.trim()) return alert("Select a student");
+    if (!form.issuedDate) return alert("Issued date is required");
+
+    const payload = {
+      ...form,
+      title: form.title.trim(),
+      studentAdmissionNo: form.studentAdmissionNo.trim(),
+      studentName: form.studentName.trim(),
+      className: form.className.trim(),
+      description: form.description.trim(),
+      fileUrl: form.fileUrl.trim(),
+      updatedBy: user?.username || "admin",
+      updatedAt: new Date().toISOString(),
     };
-    
+
+    setSubmitting(true);
+
     try {
-      if (isEditing) {
-        const response = await fetch(`http://localhost:5000/api/schoolPortalCertificationResults/${editResultId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(resultToAddOrUpdate),
-        });
-        if (response.ok) {
-          const updatedResult = await response.json();
-          setCertificationResults(prev =>
-            prev.map(res => (res._id === updatedResult._id ? updatedResult : res))
-          );
-          showAlert('Certification result updated successfully!');
+      if (mode === "api") {
+        if (editingId) {
+          const res = await apiFetch(`${API_PATH}/${editingId}`, {
+            method: "PUT",
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            const e2 = await res.json().catch(() => ({}));
+            throw new Error(e2.message || "Update failed");
+          }
+          const updated = await res.json().catch(() => null);
+          setCerts((prev) => prev.map((x) => (x._id === updated._id ? updated : x)));
+          showInfo("Certification updated (backend).");
         } else {
-          const errorData = await response.json();
-          showAlert(errorData.message || 'Failed to update certification result.');
+          const res = await apiFetch(API_PATH, {
+            method: "POST",
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            const e2 = await res.json().catch(() => ({}));
+            throw new Error(e2.message || "Create failed");
+          }
+          const created = await res.json().catch(() => null);
+          if (created?._id) setCerts((prev) => [created, ...prev]);
+          showInfo("Certification created (backend).");
         }
       } else {
-        const response = await fetch('http://localhost:5000/api/schoolPortalCertificationResults', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(resultToAddOrUpdate),
+        // LOCAL fallback
+        const localPayload = {
+          ...payload,
+          id: editingId || Date.now(),
+        };
+
+        setLocalCerts((prev) => {
+          const exists = prev.some((x) => x.id === localPayload.id);
+          return exists
+            ? prev.map((x) => (x.id === localPayload.id ? localPayload : x))
+            : [localPayload, ...prev];
         });
-        if (response.ok) {
-          const newResult = await response.json();
-          setCertificationResults(prev => [...prev, newResult]);
-          showAlert('New certification result added successfully!');
-        } else {
-          const errorData = await response.json();
-          showAlert(errorData.message || 'Failed to add new certification result.');
+
+        showInfo(editingId ? "Certification updated (local)." : "Certification created (local).");
+      }
+
+      reset();
+    } catch (e3) {
+      setErr(e3.message || "Save failed");
+      alert(e3.message || "Save failed");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  /* =========================
+     Delete (API or Local)
+  ========================= */
+  const confirmDelete = async () => {
+    if (!deleteTarget) {
+      setDeleteOpen(false);
+      return;
+    }
+
+    const id = deleteTarget._id || deleteTarget.id;
+    setSubmitting(true);
+
+    try {
+      if (mode === "api") {
+        const res = await apiFetch(`${API_PATH}/${id}`, { method: "DELETE" });
+        if (!res.ok) {
+          const e = await res.json().catch(() => ({}));
+          throw new Error(e.message || "Delete failed");
         }
+        setCerts((prev) => prev.filter((x) => x._id !== id));
+        showInfo("Certification deleted (backend).");
+      } else {
+        setLocalCerts((prev) => prev.filter((x) => x.id !== id));
+        showInfo("Certification deleted (local).");
       }
-    } catch (err) {
-      showAlert('An unexpected error occurred. Please check your network connection.');
-    }
-
-    setResultForm({
-      studentAdmissionNo: '',
-      subjectCode: '',
-      date: '',
-      objScore: '',
-      theoryScore: '',
-      pracScore: '',
-      totalScore: 0,
-      grade: '',
-      qualified: false,
-    });
-    setIsEditing(false);
-    setEditResultId(null);
-    setFormErrors({});
-  };
-
-  const editResult = (idToEdit) => {
-    const result = certificationResults.find(res => res._id === idToEdit);
-    if (result) {
-      setResultForm(result);
-      setIsEditing(true);
-      setEditResultId(idToEdit);
-      setMessage(null);
-      setFormErrors({});
+    } catch (e) {
+      alert(e.message || "Delete failed");
+    } finally {
+      setSubmitting(false);
+      setDeleteOpen(false);
+      setDeleteTarget(null);
     }
   };
 
-  const deleteResult = (idToDelete) => {
-    showConfirm(
-      'Are you sure you want to delete this result?',
-      async () => {
-        try {
-          const response = await fetch(`http://localhost:5000/api/schoolPortalCertificationResults/${idToDelete}`, {
-            method: 'DELETE',
-          });
-          if (response.ok) {
-            setCertificationResults(prev => prev.filter(res => res._id !== idToDelete));
-            showAlert('Certification result deleted successfully!');
-          } else {
-            const errorData = await response.json();
-            showAlert(errorData.message || 'Failed to delete certification result.');
-          }
-        } catch (err) {
-          showAlert('An unexpected error occurred. Please check your network connection.');
-        }
-      }
-    );
-  };
-
-  const clearForm = () => {
-    setResultForm({
-      studentAdmissionNo: '',
-      subjectCode: '',
-      date: '',
-      objScore: '',
-      theoryScore: '',
-      pracScore: '',
-      totalScore: 0,
-      grade: '',
-      qualified: false,
-    });
-    setIsEditing(false);
-    setEditResultId(null);
-    setFormErrors({});
-    setMessage(null);
-  };
-  
-  // Sorting logic
-  const sortTable = (key) => {
-    let direction = 'ascending';
-    if (sortConfig.key === key && sortConfig.direction === 'ascending') {
-      direction = 'descending';
-    }
-    setSortConfig({ key, direction });
-  };
-
-  const sortedResults = [...certificationResults]
-    .filter(res =>
-      getStudentName(res.studentAdmissionNo).toLowerCase().includes(searchTerm.toLowerCase()) ||
-      getSubjectName(res.subjectCode).toLowerCase().includes(searchTerm.toLowerCase())
-    )
-    .sort((a, b) => {
-      let keyA = a[sortConfig.key];
-      let keyB = b[sortConfig.key];
-      
-      // Special handling for nested values (student name) and dates
-      if (sortConfig.key === 'studentAdmissionNo') {
-        keyA = getStudentName(keyA);
-        keyB = getStudentName(keyB);
-      } else if (sortConfig.key === 'date') {
-        keyA = new Date(keyA);
-        keyB = new Date(keyB);
-      }
-
-      if (keyA < keyB) {
-        return sortConfig.direction === 'ascending' ? -1 : 1;
-      }
-      if (keyA > keyB) {
-        return sortConfig.direction === 'ascending' ? 1 : -1;
-      }
-      return 0;
-    });
-
-  if (!loggedInAdmin) {
-    return <div className="content-section">Access Denied. Please log in as an Admin.</div>;
-  }
+  /* =========================
+     UI
+  ========================= */
+  if (loading) return <div className="content-section">Loading certifications…</div>;
 
   return (
     <div className="content-section">
+      <h1>Admin Certification Management</h1>
+      <p style={{ color: "#666" }}>
+        Storage mode: <b>{mode === "api" ? "Backend" : "Local (fallback)"}</b>
+      </p>
+
+      {err && (
+        <div style={{ color: "#b00020", marginBottom: 10 }}>
+          <b>Error:</b> {err}
+        </div>
+      )}
+
+      {/* Info Modal */}
       <ConfirmModal
-        isOpen={isModalOpen}
-        message={modalMessage}
-        onConfirm={() => { modalAction(); setIsModalOpen(false); }}
-        onCancel={() => setIsModalOpen(false)}
-        isAlert={isModalAlert}
+        isOpen={infoOpen}
+        message={infoMsg}
+        onConfirm={() => setInfoOpen(false)}
+        onCancel={() => setInfoOpen(false)}
+        isAlert={true}
       />
-      <h1>Certification Management</h1>
+
+      {/* Delete Modal */}
+      <ConfirmModal
+        isOpen={deleteOpen}
+        message={
+          deleteTarget
+            ? `Delete "${deleteTarget.title}" for ${deleteTarget.studentName || deleteTarget.studentAdmissionNo}?`
+            : "Delete this certification?"
+        }
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteOpen(false)}
+        isAlert={false}
+      />
+
+      {/* Form */}
       <div className="sub-section">
-        <h2>{isEditing ? 'Edit Certification Result' : 'Add New Certification Result'}</h2>
-        {message && (
-          <div className={`form-message form-message-${message.type}`}>
-            {message.text}
-          </div>
-        )}
-        <form onSubmit={handleSubmit} className="cert-form">
-          <div className="form-group">
-            <label htmlFor="studentAdmissionNo" className="form-label">Student:</label>
-            <select
-              id="studentAdmissionNo"
-              value={resultForm.studentAdmissionNo}
-              onChange={handleChange}
-              disabled={isEditing}
-              className={`form-input ${formErrors.studentAdmissionNo ? 'form-input-error' : ''}`}
-            >
-              <option value="">-- Select Student --</option>
-              {students.map(student => (
-                <option key={student._id} value={student.admissionNo}>
-                  {getStudentName(student.admissionNo)}
-                </option>
-              ))}
+        <h2>{editingId ? "Edit Certification" : "Add Certification"}</h2>
+
+        <form onSubmit={save} style={{ display: "grid", gap: 10, maxWidth: 900 }}>
+          <input id="title" value={form.title} onChange={onChange} placeholder="Title (e.g. Best Student Award)" />
+
+          <select id="studentAdmissionNo" value={form.studentAdmissionNo} onChange={onChange}>
+            <option value="">Select Student (Admission No)</option>
+            {studentOptions.map((s) => (
+              <option key={s.admissionNo} value={s.admissionNo}>
+                {s.name} ({s.admissionNo}) — {s.className}
+              </option>
+            ))}
+          </select>
+
+          <input id="studentName" value={form.studentName} onChange={onChange} placeholder="Student Name" />
+          <input id="className" value={form.className} onChange={onChange} placeholder="Class" />
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <select id="type" value={form.type} onChange={onChange} style={{ flex: 1 }}>
+              <option value="Certificate">Certificate</option>
+              <option value="Award">Award</option>
+              <option value="Testimonial">Testimonial</option>
             </select>
-            {formErrors.studentAdmissionNo && <p className="error-message">{formErrors.studentAdmissionNo}</p>}
-          </div>
 
-          <div className="form-group">
-            <label htmlFor="subjectCode" className="form-label">Subject:</label>
-            <select
-              id="subjectCode"
-              value={resultForm.subjectCode}
-              onChange={handleChange}
-              disabled={isEditing}
-              className={`form-input ${formErrors.subjectCode ? 'form-input-error' : ''}`}
-            >
-              <option value="">-- Select Subject --</option>
-              {subjects.map(subject => (
-                <option key={subject._id} value={subject.subjectCode}>{getSubjectName(subject.subjectCode)}</option>
-              ))}
+            <select id="status" value={form.status} onChange={onChange} style={{ flex: 1 }}>
+              <option value="Issued">Issued</option>
+              <option value="Pending">Pending</option>
+              <option value="Revoked">Revoked</option>
             </select>
-            {formErrors.subjectCode && <p className="error-message">{formErrors.subjectCode}</p>}
+
+            <div style={{ flex: 1 }}>
+              <label style={{ fontSize: 12, color: "#666" }}>Issued Date</label>
+              <input id="issuedDate" type="date" value={form.issuedDate} onChange={onChange} />
+            </div>
           </div>
 
-          <div className="form-group">
-            <label htmlFor="date" className="form-label">Date:</label>
-            <input
-              type="date"
-              id="date"
-              value={resultForm.date}
-              onChange={handleChange}
-              className={`form-input ${formErrors.date ? 'form-input-error' : ''}`}
-            />
-            {formErrors.date && <p className="error-message">{formErrors.date}</p>}
-          </div>
+          <textarea
+            id="description"
+            value={form.description}
+            onChange={onChange}
+            rows={4}
+            placeholder="Description (optional)"
+          />
 
-          <div className="form-group">
-            <label htmlFor="objScore" className="form-label">Obj Score:</label>
-            <input
-              type="number"
-              id="objScore"
-              value={resultForm.objScore}
-              onChange={handleChange}
-              min="0"
-              max="100"
-              placeholder="Objective Score"
-              className={`form-input ${formErrors.objScore ? 'form-input-error' : ''}`}
-            />
-            {formErrors.objScore && <p className="error-message">{formErrors.objScore}</p>}
-          </div>
+          <input id="fileUrl" value={form.fileUrl} onChange={onChange} placeholder="File URL (optional)" />
 
-          <div className="form-group">
-            <label htmlFor="theoryScore" className="form-label">Theory Score:</label>
-            <input
-              type="number"
-              id="theoryScore"
-              value={resultForm.theoryScore}
-              onChange={handleChange}
-              min="0"
-              max="100"
-              placeholder="Theory Score"
-              className={`form-input ${formErrors.theoryScore ? 'form-input-error' : ''}`}
-            />
-            {formErrors.theoryScore && <p className="error-message">{formErrors.theoryScore}</p>}
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="pracScore" className="form-label">Practical Score:</label>
-            <input
-              type="number"
-              id="pracScore"
-              value={resultForm.pracScore}
-              onChange={handleChange}
-              min="0"
-              max="100"
-              placeholder="Practical Score"
-              className={`form-input ${formErrors.pracScore ? 'form-input-error' : ''}`}
-            />
-            {formErrors.pracScore && <p className="error-message">{formErrors.pracScore}</p>}
-          </div>
-
-          <div className="form-actions">
-            <button type="submit" className="form-submit-btn">
-              {isEditing ? 'Update Result' : 'Add Result'}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button type="submit" disabled={submitting}>
+              {submitting ? "Saving..." : editingId ? "Update" : "Save"}
             </button>
-            <button type="button" onClick={clearForm} className="form-clear-btn">
-              Clear Form
+            <button type="button" onClick={reset} style={{ background: "#6c757d" }} disabled={submitting}>
+              Clear
             </button>
           </div>
         </form>
       </div>
 
+      {/* List */}
       <div className="sub-section">
-        <h2>All Certification Results</h2>
+        <h2>Certifications</h2>
+
         <input
-          type="text"
-          placeholder="Search by student or subject"
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="filter-input"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search title / student / class / type / status..."
+          style={{ width: "100%", padding: 8, marginBottom: 10 }}
         />
+
         <div className="table-container">
-          <table className="cert-table">
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
-                <th onClick={() => sortTable('studentAdmissionNo')}>Student Name (ID) {sortConfig.key === 'studentAdmissionNo' ? (sortConfig.direction === 'ascending' ? '▲' : '▼') : ''}</th>
-                <th onClick={() => sortTable('subjectCode')}>Subject {sortConfig.key === 'subjectCode' ? (sortConfig.direction === 'ascending' ? '▲' : '▼') : ''}</th>
-                <th onClick={() => sortTable('date')}>Date {sortConfig.key === 'date' ? (sortConfig.direction === 'ascending' ? '▲' : '▼') : ''}</th>
-                <th>Obj</th>
-                <th>Theory</th>
-                <th>Prac</th>
-                <th>Total</th>
-                <th>Grade</th>
-                <th>Qualified</th>
-                <th>Actions</th>
+                <th style={th}>Title</th>
+                <th style={th}>Student</th>
+                <th style={th}>Class</th>
+                <th style={th}>Type</th>
+                <th style={th}>Status</th>
+                <th style={th}>Issued</th>
+                <th style={th}>File</th>
+                <th style={th}>Actions</th>
               </tr>
             </thead>
+
             <tbody>
-              {sortedResults.length > 0 ? (
-                sortedResults.map((res, index) => (
-                  <tr key={res._id} className={index % 2 === 0 ? 'even-row' : 'odd-row'}>
-                    <td>{getStudentName(res.studentAdmissionNo)}</td>
-                    <td>{getSubjectName(res.subjectCode)}</td>
-                    <td>{res.date}</td>
-                    <td>{res.objScore}</td>
-                    <td>{res.theoryScore}</td>
-                    <td>{res.pracScore}</td>
-                    <td><strong>{res.totalScore}</strong></td>
-                    <td className={`grade-status grade-${res.grade.toLowerCase().replace(' ', '-')}`}><strong>{res.grade}</strong></td>
-                    <td className={`qualified-status qualified-${res.qualified}`}>{res.qualified ? 'Yes' : 'No'}</td>
-                    <td className="table-actions">
-                      <button className="action-btn edit-btn" onClick={() => editResult(res._id)}>Edit</button>
-                      <button className="action-btn delete-btn" onClick={() => deleteResult(res._id)}>Delete</button>
+              {filtered.length ? (
+                filtered.map((c) => (
+                  <tr key={c._id || c.id}>
+                    <td style={td}><b>{c.title}</b><br /><small>{c.description || ""}</small></td>
+                    <td style={td}>{c.studentName || "-"}<br /><small>{c.studentAdmissionNo || ""}</small></td>
+                    <td style={td}>{c.className || "-"}</td>
+                    <td style={td}>{c.type || "-"}</td>
+                    <td style={td}>{c.status || "-"}</td>
+                    <td style={td}>{c.issuedDate ? String(c.issuedDate).slice(0, 10) : "-"}</td>
+                    <td style={td}>
+                      {c.fileUrl ? (
+                        <a href={c.fileUrl} target="_blank" rel="noreferrer">Open</a>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                    <td style={td}>
+                      <button onClick={() => startEdit(c)}>Edit</button>{" "}
+                      <button onClick={() => askDelete(c)} style={{ background: "#dc2626" }}>
+                        Delete
+                      </button>
                     </td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan="10" className="no-data">No certification results found.</td>
+                  <td style={td} colSpan="8">No certifications found.</td>
                 </tr>
               )}
             </tbody>
@@ -466,5 +452,8 @@ function AdminCertificationManagement() {
     </div>
   );
 }
+
+const th = { border: "1px solid #ddd", padding: 8, background: "#f2f2f2", textAlign: "left" };
+const td = { border: "1px solid #ddd", padding: 8 };
 
 export default AdminCertificationManagement;

@@ -1,132 +1,137 @@
-// src/pages/AdminHomeContent.jsx
-import React, { useState } from 'react';
-import useHomeContent from '../hooks/useHomeContent';
-import Modal from '../components/Modal';
-import '../styles/uncreated-pages.css';
+import React, { useEffect, useState } from "react";
+import { apiFetch } from "../api";
+import { useAuth } from "../context/AuthContext";
+import useLocalStorage from "../hooks/useLocalStorage";
 
+const LOCAL_KEY = "schoolPortalHomeContent";
+const API_PATH = "/api/schoolPortalHomeContent"; // backend may not have it (fallback)
 
-const NEWS_LIMIT = 3;
+const initial = {
+  headline: "",
+  subHeadline: "",
+  announcement: "",
+  whatsapp: "",
+  deadline: "",
+};
 
 export default function AdminHomeContent() {
-  const { homeContent, saveContent } = useHomeContent();
-  const [modal, setModal] = useState(null);
-  const [editItem, setEditItem] = useState(null);
+  const { user } = useAuth();
 
-  const saveNews = (item) => {
-    let list = [...homeContent.news];
+  const [local, setLocal] = useLocalStorage(LOCAL_KEY, initial);
 
-    const payload = {
-      ...item,
-      createdAt: item.createdAt || new Date().toISOString(),
-      status: 'published'
+  const [mode, setMode] = useState("loading"); // loading | api | local
+  const [err, setErr] = useState(null);
+
+  const [form, setForm] = useState(initial);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const load = async () => {
+      setMode("loading");
+      setErr(null);
+
+      try {
+        const res = await apiFetch(API_PATH);
+
+        // If backend doesn't have this entity -> fallback
+        if (!res.ok) {
+          setForm(local);
+          setMode("local");
+          return;
+        }
+
+        const data = await res.json().catch(() => ({}));
+        setForm({ ...initial, ...(data || {}) });
+        setMode("api");
+      } catch {
+        setForm(local);
+        setMode("local");
+      }
     };
 
-    if (!item.id && list.length >= NEWS_LIMIT) {
-      alert('Maximum of 3 news allowed');
-      return;
-    }
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    if (item.id) {
-      list = list.map(n => (n.id === item.id ? payload : n));
-    } else {
-      list.unshift({ ...payload, id: crypto.randomUUID() });
-    }
+  useEffect(() => {
+    if (mode === "local") setForm(local);
+  }, [local, mode]);
 
-    saveContent({ ...homeContent, news: list });
-    setModal(null);
-    setEditItem(null);
+  const onChange = (e) => setForm((p) => ({ ...p, [e.target.id]: e.target.value }));
+
+  const save = async () => {
+    if (saving) return;
+    setSaving(true);
+    setErr(null);
+
+    const payload = {
+      ...form,
+      updatedBy: user?.username || "admin",
+      updatedAt: new Date().toISOString(),
+    };
+
+    try {
+      if (mode === "api") {
+        // In API mode, we store 1 record (id-less “singleton”)
+        // Some backends save as POST; some require PUT. We try POST first.
+        const res = await apiFetch(API_PATH, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          // if POST not allowed, fallback to local to avoid breaking
+          setLocal(form);
+          setMode("local");
+          alert("Backend content endpoint not available. Saved locally instead.");
+          setSaving(false);
+          return;
+        }
+
+        alert("Home content saved to backend ✅");
+      } else {
+        setLocal(form);
+        alert("Home content saved locally ✅");
+      }
+    } catch {
+      setLocal(form);
+      setMode("local");
+      alert("Network issue. Saved locally ✅");
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const deleteNews = (id) => {
-    saveContent({
-      ...homeContent,
-      news: homeContent.news.filter(n => n.id !== id)
-    });
-  };
+  if (mode === "loading") return <div className="content-section">Loading home content…</div>;
 
   return (
-    <div className="page-container">
-      <h2>Home Content Manager</h2>
+    <div className="content-section">
+      <h1>Admin Home Content</h1>
 
-      {/* NEWS SECTION */}
-      <section>
-        <h3>News</h3>
-        <button onClick={() => setModal('news')}>Add News</button>
+      <p style={{ color: "#666" }}>
+        Storage mode: <b>{mode === "api" ? "Backend" : "Local (fallback)"}</b>
+      </p>
 
-        {homeContent.news.length === 0 && <p>No news added yet.</p>}
-
-        {homeContent.news.map(n => (
-          <div key={n.id} className="admin-list-item">
-            <strong>{n.title}</strong>
-            <div>
-              <button onClick={() => { setEditItem(n); setModal('news'); }}>
-                Edit
-              </button>
-              <button onClick={() => deleteNews(n.id)}>
-                Delete
-              </button>
-            </div>
-          </div>
-        ))}
-      </section>
-
-      {modal === 'news' && (
-        <Modal title="News Editor" onClose={() => setModal(null)}>
-          <NewsForm onSave={saveNews} data={editItem} />
-        </Modal>
+      {err && (
+        <div style={{ color: "red", marginBottom: 10 }}>
+          {err}
+        </div>
       )}
+
+      <div className="sub-section" style={{ display: "grid", gap: 10, maxWidth: 900 }}>
+        <input id="headline" value={form.headline} onChange={onChange} placeholder="Homepage headline" />
+        <input id="subHeadline" value={form.subHeadline} onChange={onChange} placeholder="Sub headline" />
+        <textarea id="announcement" value={form.announcement} onChange={onChange} rows={4} placeholder="Announcement" />
+        <input id="whatsapp" value={form.whatsapp} onChange={onChange} placeholder="WhatsApp contact (optional)" />
+        <div>
+          <label style={{ fontSize: 12, color: "#666" }}>Application deadline (optional)</label>
+          <input id="deadline" type="date" value={form.deadline} onChange={onChange} />
+        </div>
+
+        <button onClick={save} disabled={saving}>
+          {saving ? "Saving..." : "Save"}
+        </button>
+      </div>
     </div>
-  );
-}
-
-/* ---------------- NEWS FORM ---------------- */
-
-function NewsForm({ onSave, data }) {
-  // 🔒 SAFETY: normalize data
-  const safeData = data || {};
-
-  const [title, setTitle] = useState(safeData.title || '');
-  const [description, setDescription] = useState(safeData.description || '');
-  const [imageUrl, setImageUrl] = useState(safeData.imageUrl || '');
-
-  return (
-    <>
-      <input
-        type="file"
-        accept="image/*"
-        onChange={e =>
-          setImageUrl(URL.createObjectURL(e.target.files[0]))
-        }
-      />
-
-      {imageUrl && (
-        <img src={imageUrl} alt="preview" width="100%" />
-      )}
-
-      <input
-        value={title}
-        onChange={e => setTitle(e.target.value)}
-        placeholder="News Title"
-      />
-
-      <textarea
-        value={description}
-        onChange={e => setDescription(e.target.value)}
-        placeholder="News Content"
-      />
-
-      <button
-        onClick={() =>
-          onSave({
-            ...safeData,
-            title,
-            description,
-            imageUrl
-          })
-        }
-      >
-        Save News
-      </button>
-    </>
   );
 }

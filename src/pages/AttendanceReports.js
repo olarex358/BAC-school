@@ -1,177 +1,86 @@
-// src/pages/AttendanceReports.js
-import React, { useEffect, useState } from 'react';
-import useLocalStorage from '../hooks/useLocalStorage';
-import Header from '../components/Header';
-import Footer from '../components/Footer';
-
-const ALLOWED_ROLES = ['Admin', 'Principal', 'Super Admin'];
+import React, { useEffect, useMemo, useState } from "react";
+import { apiFetch } from "../api";
 
 function AttendanceReports() {
-  const user = JSON.parse(localStorage.getItem('loggedInUser'));
+  const [records, setRecords] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
 
-  const [attendance] = useLocalStorage(
-    'schoolPortalAttendance',
-    [],
-    'http://localhost:5000/api/schoolPortalAttendance'
-  );
+  const [studentOrAdm, setStudentOrAdm] = useState("");
 
-  const [students] = useLocalStorage(
-    'schoolPortalStudents',
-    [],
-    'http://localhost:5000/api/schoolPortalStudents'
-  );
-
-  const [selectedClass, setSelectedClass] = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [report, setReport] = useState([]);
-
-  if (!user || !ALLOWED_ROLES.includes(user.role)) {
-    return <div className="content-section">Access Denied</div>;
-  }
-
-  const classes = [...new Set(students.map(s => s.studentClass))].sort();
-
-  const generateReport = () => {
-    if (!selectedClass || !startDate || !endDate) return;
-
-    const filteredAttendance = attendance.filter(r =>
-      r.class === selectedClass &&
-      r.date >= startDate &&
-      r.date <= endDate
-    );
-
-    const reportMap = {};
-
-    filteredAttendance.forEach(r => {
-      if (!reportMap[r.studentId]) {
-        reportMap[r.studentId] = {
-          studentId: r.studentId,
-          present: 0,
-          absent: 0,
-          late: 0,
-          total: 0
-        };
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      setErr(null);
+      try {
+        const res = await apiFetch("/api/schoolPortalAttendance");
+        if (!res.ok) throw new Error("Failed to fetch attendance");
+        const data = await res.json().catch(() => []);
+        setRecords(Array.isArray(data) ? data : []);
+      } catch (e) {
+        setErr(e.message || "Load failed");
+      } finally {
+        setLoading(false);
       }
+    };
+    load();
+  }, []);
 
-      reportMap[r.studentId].total++;
+  const filtered = useMemo(() => {
+    const t = studentOrAdm.trim().toLowerCase();
+    if (!t) return records;
+    return records.filter((r) =>
+      String(r.studentNameSelect || r.admissionNo || "").toLowerCase().includes(t)
+    );
+  }, [records, studentOrAdm]);
 
-      if (r.status === 'Present') reportMap[r.studentId].present++;
-      if (r.status === 'Absent') reportMap[r.studentId].absent++;
-      if (r.status === 'Late') reportMap[r.studentId].late++;
+  const groupedByStudent = useMemo(() => {
+    const map = new Map();
+    filtered.forEach((r) => {
+      const key = r.studentNameSelect || r.admissionNo || "unknown";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(r);
     });
+    return Array.from(map.entries()).map(([key, rows]) => ({ key, rows }));
+  }, [filtered]);
 
-    const finalReport = Object.values(reportMap).map(r => {
-      const student = students.find(s => s.admissionNo === r.studentId);
-      const percentage =
-        r.total > 0 ? ((r.present / r.total) * 100).toFixed(1) : 0;
-
-      return {
-        name: student
-          ? `${student.firstName} ${student.lastName}`
-          : 'Unknown',
-        admissionNo: r.studentId,
-        present: r.present,
-        absent: r.absent,
-        late: r.late,
-        total: r.total,
-        percentage
-      };
-    });
-
-    setReport(finalReport);
-  };
+  if (loading) return <div className="content-section">Loading attendance reports…</div>;
+  if (err) return <div className="content-section" style={{ color: "red" }}>{err}</div>;
 
   return (
-    <>
-      <Header user={user} />
-      <div className="content-section">
-        <h1>Attendance Reports</h1>
+    <div className="content-section">
+      <h1>Attendance Reports</h1>
 
-        <div className="filter-grid">
-          <div className="form-group">
-            <label>Class</label>
-            <select
-              value={selectedClass}
-              onChange={e => setSelectedClass(e.target.value)}
-            >
-              <option value="">-- Select Class --</option>
-              {classes.map(cls => (
-                <option key={cls} value={cls}>{cls}</option>
-              ))}
-            </select>
-          </div>
+      <div className="sub-section">
+        <input
+          value={studentOrAdm}
+          onChange={(e) => setStudentOrAdm(e.target.value)}
+          placeholder="Filter by admission no..."
+          style={{ width: "100%", padding: 8 }}
+        />
+      </div>
 
-          <div className="form-group">
-            <label>Start Date</label>
-            <input
-              type="date"
-              value={startDate}
-              onChange={e => setStartDate(e.target.value)}
-            />
-          </div>
-
-          <div className="form-group">
-            <label>End Date</label>
-            <input
-              type="date"
-              value={endDate}
-              onChange={e => setEndDate(e.target.value)}
-            />
-          </div>
-
-          <button
-            onClick={generateReport}
-            disabled={!selectedClass || !startDate || !endDate}
-            className="form-submit-btn"
-          >
-            Generate Report
-          </button>
-        </div>
-
-        {report.length > 0 && (
-          <div className="table-container">
-            <table className="attendance-table">
-              <thead>
-                <tr>
-                  <th>S/N</th>
-                  <th>Name</th>
-                  <th>Admission No</th>
-                  <th>Present</th>
-                  <th>Absent</th>
-                  <th>Late</th>
-                  <th>Total</th>
-                  <th>Attendance %</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.map((r, i) => (
-                  <tr key={r.admissionNo}>
-                    <td>{i + 1}</td>
-                    <td>{r.name}</td>
-                    <td>{r.admissionNo}</td>
-                    <td>{r.present}</td>
-                    <td>{r.absent}</td>
-                    <td>{r.late}</td>
-                    <td>{r.total}</td>
-                    <td>
-                      <strong>{r.percentage}%</strong>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {report.length === 0 && (
-          <p className="mt-3">
-            Select class and date range to generate report.
-          </p>
+      <div className="sub-section">
+        <h2>Summary</h2>
+        {groupedByStudent.length ? (
+          groupedByStudent.map(({ key, rows }) => {
+            let present = 0, absent = 0;
+            rows.forEach((r) => {
+              const s = String(r.status || "").toLowerCase();
+              if (s === "present") present += 1;
+              else if (s === "absent") absent += 1;
+            });
+            return (
+              <div key={key} style={{ padding: 10, border: "1px solid #eee", borderRadius: 8, marginBottom: 10 }}>
+                <b>{key}</b> — Present: {present}, Absent: {absent}, Total: {rows.length}
+              </div>
+            );
+          })
+        ) : (
+          <p>No records.</p>
         )}
       </div>
-      <Footer />
-    </>
+    </div>
   );
 }
 

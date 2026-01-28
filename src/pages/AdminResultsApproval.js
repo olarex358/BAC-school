@@ -1,128 +1,159 @@
 // src/pages/AdminResultsApproval.js
-import React, { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
-import useLocalStorage from "../hooks/useLocalStorage";
+import React, { useEffect, useMemo, useState } from "react";
+import { apiFetch } from "../api";
+import { useAuth } from "../context/AuthContext";
 import BatchResultSlipPrint from "./results/BatchResultSlipPrint";
 
 function AdminResultsApproval() {
-  const navigate = useNavigate();
-  const [loggedInAdmin, setLoggedInAdmin] = useState(null);
+  const { user } = useAuth();
+
+  const [pendingResults, setPendingResults] = useState([]);
+  const [approvedResults, setApprovedResults] = useState([]);
+  const [students, setStudents] = useState([]);
+  const [subjects, setSubjects] = useState([]);
+  const [staffs, setStaffs] = useState([]);
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [message, setMessage] = useState(null);
   const [showBatchPrint, setShowBatchPrint] = useState(false);
 
-  // Data hooks
-  const [pendingResults, setPendingResults, loadingPending] =
-    useLocalStorage("schoolPortalPendingResults", [], "http://localhost:5000/api/schoolPortalPendingResults");
-
-  const [approvedResults, setApprovedResults, loadingApproved] =
-    useLocalStorage("schoolPortalResults", [], "http://localhost:5000/api/schoolPortalResults");
-
-  const [students] =
-    useLocalStorage("schoolPortalStudents", [], "http://localhost:5000/api/schoolPortalStudents");
-
-  const [subjects] =
-    useLocalStorage("schoolPortalSubjects", [], "http://localhost:5000/api/schoolPortalSubjects");
-
-  const [staffs] =
-    useLocalStorage("schoolPortalStaff", [], "http://localhost:5000/api/schoolPortalStaff");
-
-  const [message, setMessage] = useState(null);
-  const [searchTerm, setSearchTerm] = useState("");
-
-  // Protect route
+  /* ================= LOAD DATA ================= */
   useEffect(() => {
-    const user = JSON.parse(localStorage.getItem("loggedInUser"));
-    if (user && user.type === "admin") {
-      setLoggedInAdmin(user);
-    } else {
-      navigate("/login");
-    }
-  }, [navigate]);
+    const loadAll = async () => {
+      setLoading(true);
+      setError(null);
+
+      try {
+        const [
+          pendingRes,
+          approvedRes,
+          studentsRes,
+          subjectsRes,
+          staffRes,
+        ] = await Promise.all([
+          apiFetch("/api/schoolPortalPendingResults"),
+          apiFetch("/api/schoolPortalResults"),
+          apiFetch("/api/schoolPortalStudents"),
+          apiFetch("/api/schoolPortalSubjects"),
+          apiFetch("/api/schoolPortalStaff"),
+        ]);
+
+        if (
+          !pendingRes.ok ||
+          !approvedRes.ok ||
+          !studentsRes.ok ||
+          !subjectsRes.ok ||
+          !staffRes.ok
+        ) {
+          throw new Error("Failed to load approval data");
+        }
+
+        setPendingResults(await pendingRes.json());
+        setApprovedResults(await approvedRes.json());
+        setStudents(await studentsRes.json());
+        setSubjects(await subjectsRes.json());
+        setStaffs(await staffRes.json());
+      } catch (e) {
+        setError(e.message || "Failed to load data");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadAll();
+  }, []);
 
   /* ================= HELPERS ================= */
   const getStudentName = (admissionNo) => {
-    const student = students.find((s) => s.admissionNo === admissionNo);
-    return student ? student.name : "Unknown Student";
+    const s = students.find((x) => x.admissionNo === admissionNo);
+    return s ? s.fullName || s.name : "Unknown Student";
   };
 
-  const getSubjectName = (subjectCode) => {
-    const subject = subjects.find((s) => s.subjectCode === subjectCode);
-    return subject ? subject.subjectName : "Unknown Subject";
+  const getSubjectName = (code) => {
+    const s = subjects.find((x) => x.subjectCode === code);
+    return s ? s.subjectName : "Unknown Subject";
   };
 
   const getTeacherName = (staffId) => {
-    const teacher = staffs.find((s) => s.staffId === staffId);
-    return teacher ? `${teacher.firstname} ${teacher.surname}` : "Unknown Teacher";
+    const t = staffs.find((x) => x.staffId === staffId);
+    return t ? `${t.firstname || ""} ${t.surname || ""}`.trim() : "Unknown Teacher";
   };
 
   /* ================= APPROVE ================= */
-  const handleApprove = async (resultId) => {
+  const approveResult = async (result) => {
     if (!window.confirm("Approve this result?")) return;
 
-    const resultToApprove = pendingResults.find((r) => r.id === resultId);
-    if (!resultToApprove) return;
-
-    const approvedResult = {
-      ...resultToApprove,
-      approved: true,
-      approvedAt: Date.now(),
-    };
-
     try {
-      const addResponse = await fetch("http://localhost:5000/api/schoolPortalResults", {
+      const approvedPayload = {
+        ...result,
+        approved: true,
+        approvedBy: user?.username || "admin",
+        approvedAt: new Date().toISOString(),
+      };
+
+      const addRes = await apiFetch("/api/schoolPortalResults", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(approvedResult),
+        body: JSON.stringify(approvedPayload),
       });
 
-      const deleteResponse = await fetch(
-        `http://localhost:5000/api/schoolPortalPendingResults/${resultToApprove._id}`,
+      const delRes = await apiFetch(
+        `/api/schoolPortalPendingResults/${result._id}`,
         { method: "DELETE" }
       );
 
-      if (addResponse.ok && deleteResponse.ok) {
-        setPendingResults((prev) => prev.filter((r) => r.id !== resultId));
-        setApprovedResults((prev) => [...prev, approvedResult]);
-        setMessage({ type: "success", text: "Result approved successfully." });
+      if (!addRes.ok || !delRes.ok) {
+        throw new Error("Approval failed");
       }
-    } catch (err) {
-      setMessage({ type: "error", text: "Approval failed. Network issue." });
+
+      setPendingResults((prev) => prev.filter((r) => r._id !== result._id));
+      setApprovedResults((prev) => [...prev, approvedPayload]);
+      setMessage({ type: "success", text: "Result approved successfully." });
+    } catch (e) {
+      setMessage({ type: "error", text: e.message || "Approval failed" });
     }
   };
 
   /* ================= REJECT ================= */
-  const handleReject = async (resultId) => {
+  const rejectResult = async (result) => {
     if (!window.confirm("Reject this result?")) return;
 
-    const resultToReject = pendingResults.find((r) => r.id === resultId);
-    if (!resultToReject) return;
-
     try {
-      const response = await fetch(
-        `http://localhost:5000/api/schoolPortalPendingResults/${resultToReject._id}`,
+      const res = await apiFetch(
+        `/api/schoolPortalPendingResults/${result._id}`,
         { method: "DELETE" }
       );
 
-      if (response.ok) {
-        setPendingResults((prev) => prev.filter((r) => r.id !== resultId));
-        setMessage({ type: "success", text: "Result rejected." });
-      }
-    } catch (err) {
-      setMessage({ type: "error", text: "Rejection failed." });
+      if (!res.ok) throw new Error("Rejection failed");
+
+      setPendingResults((prev) => prev.filter((r) => r._id !== result._id));
+      setMessage({ type: "success", text: "Result rejected." });
+    } catch (e) {
+      setMessage({ type: "error", text: e.message || "Rejection failed" });
     }
   };
 
   /* ================= FILTER ================= */
-  const filteredPendingResults = pendingResults.filter(
-    (r) =>
-      getStudentName(r.studentNameSelect).toLowerCase().includes(searchTerm.toLowerCase()) ||
-      getSubjectName(r.subjectSelect).toLowerCase().includes(searchTerm.toLowerCase()) ||
-      getTeacherName(r.submittedBy).toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  if (!loggedInAdmin) return <div>Access Denied</div>;
-  if (loadingPending || loadingApproved) return <div>Loading...</div>;
+  const filteredPending = useMemo(() => {
+    const t = searchTerm.toLowerCase();
+    return pendingResults.filter(
+      (r) =>
+        getStudentName(r.studentNameSelect).toLowerCase().includes(t) ||
+        getSubjectName(r.subjectSelect).toLowerCase().includes(t) ||
+        getTeacherName(r.submittedBy).toLowerCase().includes(t)
+    );
+  }, [pendingResults, searchTerm]);
 
   /* ================= UI ================= */
+  if (loading) return <div className="content-section">Loading approvals…</div>;
+  if (error)
+    return (
+      <div className="content-section" style={{ color: "red" }}>
+        {error}
+      </div>
+    );
+
   return (
     <div className="content-section">
       <h1>Results Approval</h1>
@@ -133,8 +164,9 @@ function AdminResultsApproval() {
           style={{
             padding: 10,
             marginBottom: 15,
-            color: "white",
-            backgroundColor: message.type === "success" ? "#28a745" : "#dc3545",
+            color: "#fff",
+            background:
+              message.type === "success" ? "#28a745" : "#dc3545",
           }}
         >
           {message.text}
@@ -149,7 +181,6 @@ function AdminResultsApproval() {
         style={{ width: "100%", padding: 8, marginBottom: 15 }}
       />
 
-      {/* ===== BATCH PRINT BUTTON ===== */}
       <button
         className="action-btn"
         style={{ marginBottom: 15 }}
@@ -161,7 +192,6 @@ function AdminResultsApproval() {
         Print All Approved Result Slips
       </button>
 
-      {/* ===== PENDING TABLE ===== */}
       <div className="table-container">
         <table>
           <thead>
@@ -175,21 +205,17 @@ function AdminResultsApproval() {
             </tr>
           </thead>
           <tbody>
-            {filteredPendingResults.length ? (
-              filteredPendingResults.map((r) => (
-                <tr key={r.id}>
-                  <td>{getStudentName(r.studentNameSelect)} ({r.studentNameSelect})</td>
+            {filteredPending.length ? (
+              filteredPending.map((r) => (
+                <tr key={r._id}>
+                  <td>{getStudentName(r.studentNameSelect)}</td>
                   <td>{r.classSelect}</td>
                   <td>{getSubjectName(r.subjectSelect)}</td>
                   <td>{r.totalScore}</td>
                   <td>{getTeacherName(r.submittedBy)}</td>
                   <td>
-                    <button className="action-btn edit-btn" onClick={() => handleApprove(r.id)}>
-                      Approve
-                    </button>
-                    <button className="action-btn delete-btn" onClick={() => handleReject(r.id)}>
-                      Reject
-                    </button>
+                    <button onClick={() => approveResult(r)}>Approve</button>{" "}
+                    <button onClick={() => rejectResult(r)}>Reject</button>
                   </td>
                 </tr>
               ))
@@ -202,7 +228,6 @@ function AdminResultsApproval() {
         </table>
       </div>
 
-      {/* ===== BATCH PRINT RENDER ===== */}
       {showBatchPrint && (
         <BatchResultSlipPrint
           students={students}

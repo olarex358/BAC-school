@@ -1,333 +1,152 @@
-// src/pages/AdminCalendarManagement.js
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import useLocalStorage from '../hooks/useLocalStorage';
-import ConfirmModal from '../components/ConfirmModal';
- // New CSS file for styling
+import React, { useEffect, useMemo, useState } from "react";
+import { apiFetch } from "../api";
+import useLocalStorage from "../hooks/useLocalStorage";
+
+const LOCAL_KEY = "schoolPortalCalendarEvents";
+const API_PATH = "/api/schoolPortalCalendarEvents"; // if backend doesn’t have it → fallback
+
+const initialEvent = { title: "", date: "", time: "", location: "", note: "" };
 
 function AdminCalendarManagement() {
-  const navigate = useNavigate();
-  const [loggedInAdmin, setLoggedInAdmin] = useState(null);
+  const [localEvents, setLocalEvents] = useLocalStorage(LOCAL_KEY, []);
+  const [events, setEvents] = useState([]);
 
-  // Update hook to get data from the backend
-  const [calendarEvents, setCalendarEvents, loadingEvents] = useLocalStorage('schoolPortalCalendarEvents', [], 'http://localhost:5000/api/schoolPortalCalendarEvents');
+  const [mode, setMode] = useState("loading"); // loading | api | local
+  const [err, setErr] = useState(null);
 
-  const [eventForm, setEventForm] = useState({
-    title: '',
-    date: '',
-    description: '',
-    audience: 'all'
-  });
-  const [formErrors, setFormErrors] = useState({});
-  const [message, setMessage] = useState(null);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editEventId, setEditEventId] = useState(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  
-  // State for table sorting
-  const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'ascending' });
-
-  // Modal State
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalMessage, setModalMessage] = useState('');
-  const [modalAction, setModalAction] = useState(() => {});
-  const [isModalAlert, setIsModalAlert] = useState(false);
-
-  // Helper functions for modal control
-  const showConfirm = (msg, action) => {
-    setModalMessage(msg);
-    setModalAction(() => action);
-    setIsModalAlert(false);
-    setIsModalOpen(true);
-  };
-
-  const showAlert = (msg, action = () => {}) => {
-    setModalMessage(msg);
-    setModalAction(() => action);
-    setIsModalAlert(true);
-    setIsModalOpen(true);
-  };
+  const [form, setForm] = useState(initialEvent);
+  const [editingId, setEditingId] = useState(null);
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
-    const user = JSON.parse(localStorage.getItem('loggedInUser'));
-    if (user && user.type === 'admin') {
-      setLoggedInAdmin(user);
-    } else {
-      navigate('/login');
-    }
-  }, [navigate]);
-
-  const validateForm = () => {
-    let errors = {};
-    if (!eventForm.title.trim()) errors.title = 'Title is required.';
-    if (!eventForm.date) errors.date = 'Date is required.';
-    if (!eventForm.description.trim()) errors.description = 'Description is required.';
-    if (!eventForm.audience) errors.audience = 'Audience is required.';
-    setFormErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
-
-  const handleChange = (e) => {
-    const { id, value } = e.target;
-    setEventForm(prev => ({ ...prev, [id]: value }));
-    setFormErrors(prev => ({ ...prev, [id]: '' }));
-    setMessage(null);
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setMessage(null);
-    if (!validateForm()) {
-      showAlert('Please correct the errors in the form.');
-      return;
-    }
-    const eventToAddOrUpdate = {
-      ...eventForm,
-      timestamp: new Date().toISOString()
+    const load = async () => {
+      setMode("loading");
+      setErr(null);
+      try {
+        const res = await apiFetch(API_PATH);
+        if (res.ok) {
+          const data = await res.json().catch(() => []);
+          setEvents(Array.isArray(data) ? data : []);
+          setMode("api");
+          return;
+        }
+        // fallback for 404/Entity not found
+        setEvents(localEvents);
+        setMode("local");
+      } catch {
+        setEvents(localEvents);
+        setMode("local");
+      }
     };
-    
-    try {
-      if (isEditing) {
-        const response = await fetch(`http://localhost:5000/api/schoolPortalCalendarEvents/${editEventId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(eventToAddOrUpdate),
-        });
-        if (response.ok) {
-          const updatedEvent = await response.json();
-          setCalendarEvents(prevEvents =>
-            prevEvents.map(event =>
-              event._id === updatedEvent._id ? updatedEvent : event
-            )
-          );
-          showAlert('Calendar event updated successfully!');
-        } else {
-          const errorData = await response.json();
-          showAlert(errorData.message || 'Failed to update calendar event.');
-        }
-      } else {
-        const response = await fetch('http://localhost:5000/api/schoolPortalCalendarEvents', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(eventToAddOrUpdate),
-        });
-        if (response.ok) {
-          const newEvent = await response.json();
-          setCalendarEvents(prevEvents => [...prevEvents, newEvent]);
-          showAlert('Calendar event added successfully!');
-        } else {
-          const errorData = await response.json();
-          showAlert(errorData.message || 'Failed to add new calendar event.');
-        }
-      }
-    } catch (err) {
-      showAlert('An unexpected error occurred. Please check your network connection.');
-    }
-    
-    setEventForm({ title: '', date: '', description: '', audience: 'all' });
-    setIsEditing(false);
-    setEditEventId(null);
-    setFormErrors({});
-  };
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const editEvent = (idToEdit) => {
-    const event = calendarEvents.find(e => e._id === idToEdit);
-    if (event) {
-      setEventForm(event);
-      setIsEditing(true);
-      setEditEventId(idToEdit);
-      setMessage(null);
-      setFormErrors({});
-    }
-  };
+  useEffect(() => {
+    if (mode === "local") setEvents(localEvents);
+  }, [localEvents, mode]);
 
-  const deleteEvent = (idToDelete) => {
-    showConfirm(
-      'Are you sure you want to delete this event?',
-      async () => {
-        try {
-          const response = await fetch(`http://localhost:5000/api/schoolPortalCalendarEvents/${idToDelete}`, {
-            method: 'DELETE',
-          });
-          if (response.ok) {
-            setCalendarEvents(prevEvents => prevEvents.filter(event => event._id !== idToDelete));
-            showAlert('Event deleted successfully!');
-          } else {
-            const errorData = await response.json();
-            showAlert(errorData.message || 'Failed to delete event.');
-          }
-        } catch (err) {
-          showAlert('An unexpected error occurred. Please check your network connection.');
-        }
-      }
+  const filtered = useMemo(() => {
+    const t = search.trim().toLowerCase();
+    if (!t) return events;
+    return events.filter((e) =>
+      [e.title, e.date, e.location, e.note].some((v) => String(v || "").toLowerCase().includes(t))
     );
+  }, [events, search]);
+
+  const onChange = (e) => setForm((p) => ({ ...p, [e.target.id]: e.target.value }));
+
+  const reset = () => {
+    setForm(initialEvent);
+    setEditingId(null);
   };
 
-  const clearForm = () => {
-    setEventForm({ title: '', date: '', description: '', audience: 'all' });
-    setIsEditing(false);
-    setEditEventId(null);
-    setFormErrors({});
-    setMessage(null);
-  };
-  
-  // Sorting logic
-  const sortTable = (key) => {
-    let direction = 'ascending';
-    if (sortConfig.key === key && sortConfig.direction === 'ascending') {
-      direction = 'descending';
-    }
-    setSortConfig({ key, direction });
-  };
+  const saveLocal = () => {
+    const payload = {
+      ...form,
+      id: editingId || Date.now(),
+      title: form.title.trim(),
+    };
+    if (!payload.title || !payload.date) return alert("Title and date are required");
 
-  const sortedEvents = [...calendarEvents]
-    .filter(event =>
-      event.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      event.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      event.date.includes(searchTerm)
-    )
-    .sort((a, b) => {
-      let keyA = a[sortConfig.key];
-      let keyB = b[sortConfig.key];
-      
-      // Special handling for date sorting
-      if (sortConfig.key === 'date') {
-        keyA = new Date(keyA);
-        keyB = new Date(keyB);
-      }
-      
-      if (keyA < keyB) {
-        return sortConfig.direction === 'ascending' ? -1 : 1;
-      }
-      if (keyA > keyB) {
-        return sortConfig.direction === 'ascending' ? 1 : -1;
-      }
-      return 0;
+    setLocalEvents((prev) => {
+      const exists = prev.some((x) => x.id === payload.id);
+      return exists ? prev.map((x) => (x.id === payload.id ? payload : x)) : [payload, ...prev];
     });
+    reset();
+  };
 
-  if (!loggedInAdmin) {
-    return <div className="content-section">Access Denied. Please log in as an Admin.</div>;
-  }
+  const deleteLocal = (id) => {
+    if (!window.confirm("Delete this event?")) return;
+    setLocalEvents((prev) => prev.filter((x) => x.id !== id));
+  };
 
-  if (loadingEvents) {
-    return <div className="content-section">Loading calendar events...</div>;
-  }
+  // If API mode exists later, you can expand with api POST/PUT/DELETE.
+  if (mode === "loading") return <div className="content-section">Loading calendar…</div>;
+  if (err) return <div className="content-section" style={{ color: "red" }}>{err}</div>;
 
   return (
     <div className="content-section">
-      <ConfirmModal
-        isOpen={isModalOpen}
-        message={modalMessage}
-        onConfirm={() => { modalAction(); setIsModalOpen(false); }}
-        onCancel={() => setIsModalOpen(false)}
-        isAlert={isModalAlert}
-      />
-      <h1>Calendar Management</h1>
+      <h1>Admin Calendar Management</h1>
+      <p style={{ color: "#666" }}>
+        Storage mode: <b>{mode === "api" ? "Backend" : "Local (fallback)"}</b>
+      </p>
+
       <div className="sub-section">
-        <h2>{isEditing ? 'Edit Calendar Event' : 'Add New Calendar Event'}</h2>
-        {message && (
-          <div className={`form-message form-message-${message.type}`}>
-            {message.text}
+        <h2>{editingId ? "Edit Event" : "Add Event"}</h2>
+
+        <div style={{ display: "grid", gap: 10, maxWidth: 800 }}>
+          <input id="title" value={form.title} onChange={onChange} placeholder="Event title" />
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <input id="date" type="date" value={form.date} onChange={onChange} />
+            <input id="time" type="time" value={form.time} onChange={onChange} />
           </div>
-        )}
-        <form onSubmit={handleSubmit} className="calendar-form">
-          <div className="form-group">
-            <label htmlFor="title" className="form-label">Event Title:</label>
-            <input
-              type="text"
-              id="title"
-              value={eventForm.title}
-              onChange={handleChange}
-              placeholder="e.g., Mid-Term Break"
-              className={`form-input ${formErrors.title ? 'form-input-error' : ''}`}
-            />
-            {formErrors.title && <p className="error-message">{formErrors.title}</p>}
+          <input id="location" value={form.location} onChange={onChange} placeholder="Location (optional)" />
+          <textarea id="note" value={form.note} onChange={onChange} rows={3} placeholder="Note (optional)" />
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button onClick={saveLocal}>{editingId ? "Update" : "Save"}</button>
+            <button onClick={reset} style={{ background: "#6c757d" }}>Clear</button>
           </div>
-          <div className="form-group">
-            <label htmlFor="date" className="form-label">Date:</label>
-            <input
-              type="date"
-              id="date"
-              value={eventForm.date}
-              onChange={handleChange}
-              className={`form-input ${formErrors.date ? 'form-input-error' : ''}`}
-            />
-            {formErrors.date && <p className="error-message">{formErrors.date}</p>}
-          </div>
-          <div className="form-group form-group-full">
-            <label htmlFor="description" className="form-label">Description:</label>
-            <textarea
-              id="description"
-              value={eventForm.description}
-              onChange={handleChange}
-              rows="3"
-              placeholder="A brief description of the event."
-              className={`form-input ${formErrors.description ? 'form-input-error' : ''}`}
-            ></textarea>
-            {formErrors.description && <p className="error-message">{formErrors.description}</p>}
-          </div>
-          <div className="form-group form-group-full">
-            <label htmlFor="audience" className="form-label">Audience:</label>
-            <select
-              id="audience"
-              value={eventForm.audience}
-              onChange={handleChange}
-              className={`form-input ${formErrors.audience ? 'form-input-error' : ''}`}
-            >
-              <option value="all">All (Students & Staff)</option>
-              <option value="students">Students Only</option>
-              <option value="staff">Staff Only</option>
-            </select>
-            {formErrors.audience && <p className="error-message">{formErrors.audience}</p>}
-          </div>
-          <div className="form-actions">
-            <button type="submit" className="form-submit-btn">
-              {isEditing ? 'Update Event' : 'Add Event'}
-            </button>
-            <button type="button" onClick={clearForm} className="form-clear-btn">
-              Clear Form
-            </button>
-          </div>
-        </form>
+        </div>
       </div>
+
       <div className="sub-section">
-        <h2>All Calendar Events</h2>
+        <h2>Events</h2>
         <input
-          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
           placeholder="Search events..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="filter-input"
+          style={{ width: "100%", padding: 8, marginBottom: 10 }}
         />
+
         <div className="table-container">
-          <table className="calendar-table">
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
-                <th onClick={() => sortTable('title')}>Title {sortConfig.key === 'title' ? (sortConfig.direction === 'ascending' ? '▲' : '▼') : ''}</th>
-                <th onClick={() => sortTable('date')}>Date {sortConfig.key === 'date' ? (sortConfig.direction === 'ascending' ? '▲' : '▼') : ''}</th>
-                <th>Description</th>
-                <th onClick={() => sortTable('audience')}>Audience {sortConfig.key === 'audience' ? (sortConfig.direction === 'ascending' ? '▲' : '▼') : ''}</th>
-                <th>Actions</th>
+                <th style={th}>Title</th>
+                <th style={th}>Date</th>
+                <th style={th}>Time</th>
+                <th style={th}>Location</th>
+                <th style={th}>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {sortedEvents.length > 0 ? (
-                sortedEvents.map((event, index) => (
-                  <tr key={event._id} className={index % 2 === 0 ? 'even-row' : 'odd-row'}>
-                    <td>{event.title}</td>
-                    <td>{event.date}</td>
-                    <td>{event.description}</td>
-                    <td>{event.audience.charAt(0).toUpperCase() + event.audience.slice(1)}</td>
-                    <td className="table-actions">
-                      <button className="action-btn edit-btn" onClick={() => editEvent(event._id)}>Edit</button>
-                      <button className="action-btn delete-btn" onClick={() => deleteEvent(event._id)}>Delete</button>
+              {filtered.length ? (
+                filtered.map((e) => (
+                  <tr key={e._id || e.id}>
+                    <td style={td}><b>{e.title}</b><br /><small>{e.note || ""}</small></td>
+                    <td style={td}>{e.date}</td>
+                    <td style={td}>{e.time || "-"}</td>
+                    <td style={td}>{e.location || "-"}</td>
+                    <td style={td}>
+                      <button onClick={() => { setEditingId(e.id); setForm({ ...initialEvent, ...e }); }}>Edit</button>{" "}
+                      <button onClick={() => deleteLocal(e.id)} style={{ background: "#dc2626" }}>Delete</button>
                     </td>
                   </tr>
                 ))
               ) : (
-                <tr>
-                  <td colSpan="5" className="no-data">No calendar events found.</td>
-                </tr>
+                <tr><td style={td} colSpan="5">No events.</td></tr>
               )}
             </tbody>
           </table>
@@ -336,5 +155,8 @@ function AdminCalendarManagement() {
     </div>
   );
 }
+
+const th = { border: "1px solid #ddd", padding: 8, background: "#f2f2f2", textAlign: "left" };
+const td = { border: "1px solid #ddd", padding: 8 };
 
 export default AdminCalendarManagement;

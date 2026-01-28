@@ -1,363 +1,354 @@
 // src/pages/AcademicManagement.js
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import useLocalStorage from '../hooks/useLocalStorage';
-import ConfirmModal from '../components/ConfirmModal';
+import React, { useEffect, useMemo, useState } from "react";
+import { apiFetch } from "../api";
+import { useAuth } from "../context/AuthContext";
+import ConfirmModal from "../components/ConfirmModal";
 
+const initialSubject = {
+  subjectName: "",
+  subjectCode: "",
+  classLevel: "", // optional (e.g. JSS1, SS2)
+  status: "Active",
+};
 
 function AcademicManagement() {
-  const navigate = useNavigate();
-  const [loggedInAdmin, setLoggedInAdmin] = useState(null);
+  const { user } = useAuth();
 
-  // 1. FIX: useLocalStorage for local persistence only (no API URL)
-  const [subjects, setSubjects] = useLocalStorage('schoolPortalSubjects', []);
-
-  // NEW: State for API loading and fetching errors.
-  const [loadingSubjects, setLoadingSubjects] = useState(true);
+  const [subjects, setSubjects] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(null);
 
-  const [newSubject, setNewSubject] = useState({
-    subjectName: '',
-    subjectCode: ''
-  });
-  const [submitButtonText, setSubmitButtonText] = useState('Add Subject');
+  const [searchTerm, setSearchTerm] = useState("");
+
+  const [form, setForm] = useState(initialSubject);
   const [isEditing, setIsEditing] = useState(false);
-  const [editSubjectId, setEditSubjectId] = useState(null); // To store the MongoDB _id
-  const [searchTerm, setSearchTerm] = useState('');
+  const [editId, setEditId] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
   const [formErrors, setFormErrors] = useState({});
-  const [message, setMessage] = useState(null);
 
-  // Modal State
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalMessage, setModalMessage] = useState('');
-  const [modalAction, setModalAction] = useState(() => {});
-  const [isModalAlert, setIsModalAlert] = useState(false);
+  // modals
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [infoMsg, setInfoMsg] = useState("");
 
-  // Helper functions for modal control
-  const showConfirm = (msg, action) => {
-    setModalMessage(msg);
-    setModalAction(() => action);
-    setIsModalAlert(false);
-    setIsModalOpen(true);
-  };
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
-  const showAlert = (msg, action = () => {}) => {
-    setModalMessage(msg);
-    setModalAction(() => action);
-    setIsModalAlert(true);
-    setIsModalOpen(true);
-  };
-
+  /* =========================
+     Load subjects
+  ========================= */
   useEffect(() => {
-    const user = JSON.parse(localStorage.getItem('loggedInUser'));
-    const adminToken = localStorage.getItem('adminToken'); // Get the token
+    const loadSubjects = async () => {
+      setLoading(true);
+      setFetchError(null);
 
-    if (user && user.type === 'admin') {
-      setLoggedInAdmin(user);
-    } else {
-      // Navigate to login if not authenticated as admin
-      navigate('/login');
-      return;
-    }
-    
-    // 2. FIX: Dedicated useEffect for secure data fetch
-    const fetchSubjects = async () => {
-        setLoadingSubjects(true);
-        setFetchError(null);
-        
-        if (!adminToken) {
-            setFetchError('No Admin Token found. Please log in to view subjects.');
-            setLoadingSubjects(false);
-            return;
+      try {
+        const res = await apiFetch("/api/schoolPortalSubjects");
+        if (!res.ok) {
+          const e = await res.json().catch(() => ({}));
+          throw new Error(e.message || `Failed to fetch subjects (${res.status})`);
         }
-        
-        try {
-            const response = await fetch('http://localhost:5000/api/schoolPortalSubjects', {
-                method: 'GET',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${adminToken}`, // CRITICAL FIX
-                },
-            });
-            
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.message || `Failed to fetch subjects (Status: ${response.status}).`);
-            }
-
-            const data = await response.json();
-            setSubjects(data);
-            
-        } catch (err) {
-            setFetchError(err.message || 'An unexpected error occurred during subject fetch.');
-            console.error('Fetch error:', err);
-        } finally {
-            setLoadingSubjects(false);
-        }
+        const data = await res.json().catch(() => []);
+        setSubjects(Array.isArray(data) ? data : []);
+      } catch (e) {
+        setFetchError(e.message || "Failed to load subjects");
+      } finally {
+        setLoading(false);
+      }
     };
-    
-    fetchSubjects();
 
-  }, [navigate,]); // Added setSubjects to dependency array
+    loadSubjects();
+  }, []);
 
-  const validateForm = () => {
-    let errors = {};
-    if (!newSubject.subjectName.trim()) errors.subjectName = 'Subject Name is required.';
-    if (!newSubject.subjectCode.trim()) errors.subjectCode = 'Subject Code is required.';
-    setFormErrors(errors);
-    return Object.keys(errors).length === 0;
+  /* =========================
+     Helpers
+  ========================= */
+  const showInfo = (msg) => {
+    setInfoMsg(msg);
+    setInfoOpen(true);
   };
 
+  const resetForm = () => {
+    setForm(initialSubject);
+    setIsEditing(false);
+    setEditId(null);
+    setFormErrors({});
+  };
+
+  const validate = (data) => {
+    const errors = {};
+    if (!data.subjectName.trim()) errors.subjectName = "Subject name is required";
+    if (!data.subjectCode.trim()) errors.subjectCode = "Subject code is required";
+    return errors;
+  };
+
+  /* =========================
+     Actions
+  ========================= */
   const handleChange = (e) => {
     const { id, value } = e.target;
-    setNewSubject(prevSubject => ({
-      ...prevSubject,
-      [id]: value
-    }));
-    setFormErrors(prevErrors => ({
-      ...prevErrors,
-      [id]: ''
-    }));
+    setForm((p) => ({ ...p, [id]: value }));
   };
 
-  // 3. FIX: Secure API call for submit (POST/PUT)
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setMessage(null);
-    if (!validateForm()) {
-      showAlert('Please correct the errors in the form.');
+  const startEdit = (subj) => {
+    setIsEditing(true);
+    setEditId(subj._id);
+
+    setForm({
+      subjectName: subj.subjectName || "",
+      subjectCode: subj.subjectCode || "",
+      classLevel: subj.classLevel || "",
+      status: subj.status || "Active",
+    });
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const askDelete = (subj) => {
+    setDeleteTarget(subj);
+    setDeleteOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget?._id) {
+      setDeleteOpen(false);
       return;
     }
 
-    const adminToken = localStorage.getItem('adminToken');
-    if (!adminToken) {
-        showAlert('Authentication failed: Admin token missing. Please log in.');
-        return;
-    }
+    setSubmitting(true);
+    try {
+      const res = await apiFetch(`/api/schoolPortalSubjects/${deleteTarget._id}`, {
+        method: "DELETE",
+      });
 
-    const secureHeaders = { 
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${adminToken}`, // CRITICAL FIX
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        throw new Error(e.message || "Failed to delete subject");
+      }
+
+      setSubjects((prev) => prev.filter((s) => s._id !== deleteTarget._id));
+      showInfo("Subject deleted successfully.");
+    } catch (e) {
+      alert(e.message || "Delete failed");
+    } finally {
+      setSubmitting(false);
+      setDeleteOpen(false);
+      setDeleteTarget(null);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (submitting) return;
+
+    const payload = {
+      subjectName: form.subjectName.trim(),
+      subjectCode: form.subjectCode.trim(),
+      classLevel: form.classLevel?.trim() || "",
+      status: form.status || "Active",
+      updatedBy: user?.username || user?.role || "user",
+      updatedAt: new Date().toISOString(),
     };
 
+    const errors = validate(payload);
+    setFormErrors(errors);
+    if (Object.keys(errors).length) return;
+
+    setSubmitting(true);
     try {
-        if (isEditing) {
-            const response = await fetch(`http://localhost:5000/api/schoolPortalSubjects/${editSubjectId}`, {
-                method: 'PUT',
-                headers: secureHeaders,
-                body: JSON.stringify(newSubject),
-            });
-            if (response.ok) {
-                const updatedSubject = await response.json();
-                setSubjects(prevSubjects =>
-                    prevSubjects.map(sub => (sub._id === updatedSubject._id ? updatedSubject : sub))
-                );
-                showAlert('Subject data updated successfully!');
-            } else {
-                const errorData = await response.json();
-                showAlert(errorData.message || 'Failed to update subject.');
-            }
-        } else {
-            const response = await fetch('http://localhost:5000/api/schoolPortalSubjects', {
-                method: 'POST',
-                headers: secureHeaders,
-                body: JSON.stringify(newSubject),
-            });
-            if (response.ok) {
-                const createdSubject = await response.json();
-                setSubjects(prevSubjects => [...prevSubjects, createdSubject]);
-                showAlert('New subject added successfully!');
-            } else {
-                const errorData = await response.json();
-                showAlert(errorData.message || 'Failed to add new subject. Check if the subject code is already in use.');
-            }
-        }
-    } catch (err) {
-        showAlert('An unexpected error occurred. Please check your network connection.');
-    }
+      if (isEditing) {
+        const res = await apiFetch(`/api/schoolPortalSubjects/${editId}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
 
-    setNewSubject({
-      subjectName: '',
-      subjectCode: ''
-    });
-    setSubmitButtonText('Add Subject');
-    setIsEditing(false);
-    setEditSubjectId(null);
-    setFormErrors({});
-  };
-
-  const editSubject = (subjectCodeToEdit) => {
-    const subjectToEdit = subjects.find(s => s.subjectCode === subjectCodeToEdit);
-    if (subjectToEdit) {
-      setNewSubject(subjectToEdit);
-      setSubmitButtonText('Update Subject');
-      setIsEditing(true);
-      setEditSubjectId(subjectToEdit._id);
-      setFormErrors({});
-      setMessage(null);
-    }
-  };
-
-  // 4. FIX: Secure API call for delete
-  const deleteSubject = (subjectCodeToDelete) => {
-    showConfirm(
-      `Are you sure you want to delete subject: ${subjectCodeToDelete}?`,
-      async () => {
-        const adminToken = localStorage.getItem('adminToken');
-        if (!adminToken) {
-            showAlert('Authentication failed: Admin token missing. Please log in.');
-            return;
+        if (!res.ok) {
+          const e2 = await res.json().catch(() => ({}));
+          throw new Error(e2.message || "Failed to update subject");
         }
 
-        const subjectToDelete = subjects.find(s => s.subjectCode === subjectCodeToDelete);
-        if (!subjectToDelete) {
-            showAlert('Subject not found.');
-            return;
+        const updated = await res.json().catch(() => null);
+        if (updated?._id) {
+          setSubjects((prev) => prev.map((s) => (s._id === updated._id ? updated : s)));
         }
 
-        try {
-            const response = await fetch(`http://localhost:5000/api/schoolPortalSubjects/${subjectToDelete._id}`, {
-                method: 'DELETE',
-                headers: {
-                    'Authorization': `Bearer ${adminToken}`, // CRITICAL FIX
-                }
-            });
-            if (response.ok) {
-                setSubjects(prevSubjects => prevSubjects.filter(subject => subject.subjectCode !== subjectCodeToDelete));
-                showAlert('Subject deleted successfully!');
-            } else {
-                const errorData = await response.json();
-                showAlert(errorData.message || 'Failed to delete subject.');
-            }
-        } catch (err) {
-            showAlert('An unexpected error occurred. Please check your network connection.');
+        showInfo("Subject updated successfully.");
+        resetForm();
+      } else {
+        const res = await apiFetch("/api/schoolPortalSubjects", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          const e2 = await res.json().catch(() => ({}));
+          throw new Error(e2.message || "Failed to create subject (maybe duplicate code?)");
         }
+
+        const created = await res.json().catch(() => null);
+        if (created?._id) setSubjects((prev) => [created, ...prev]);
+
+        showInfo("Subject created successfully.");
+        resetForm();
       }
-    );
+    } catch (e3) {
+      alert(e3.message || "Save failed");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const handleSearchChange = (e) => {
-    setSearchTerm(e.target.value);
-  };
+  const filteredSubjects = useMemo(() => {
+    const t = searchTerm.trim().toLowerCase();
+    if (!t) return subjects;
 
-  const clearSearchAndForm = () => {
-    setSearchTerm('');
-    setNewSubject({
-      subjectName: '',
-      subjectCode: ''
+    return subjects.filter((s) => {
+      const name = String(s.subjectName || "").toLowerCase();
+      const code = String(s.subjectCode || "").toLowerCase();
+      const lvl = String(s.classLevel || "").toLowerCase();
+      return name.includes(t) || code.includes(t) || lvl.includes(t);
     });
-    setSubmitButtonText('Add Subject');
-    setIsEditing(false);
-    setEditSubjectId(null);
-    setFormErrors({});
-    setMessage(null);
-  };
+  }, [subjects, searchTerm]);
 
-  const filteredSubjects = subjects.filter(subject =>
-    subject.subjectName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    subject.subjectCode.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  /* =========================
+     UI
+  ========================= */
+  if (loading) return <div className="content-section">Loading subjects…</div>;
 
-  if (!loggedInAdmin || loadingSubjects) {
-    return <div className="content-section">Loading subjects data...</div>;
-  }
-  
   if (fetchError) {
-      return (
-          <div className="content-section" style={{ color: '#dc3545', fontWeight: 'bold', padding: '20px', border: '1px solid #dc3545', borderRadius: '5px' }}>
-              Error fetching data: {fetchError}. Please log in or check the API connection.
-          </div>
-      );
+    return (
+      <div
+        className="content-section"
+        style={{
+          color: "#b00020",
+          fontWeight: "bold",
+          padding: 20,
+          border: "1px solid #b00020",
+          borderRadius: 6,
+        }}
+      >
+        Error: {fetchError}
+      </div>
+    );
   }
 
   return (
     <div className="content-section">
+      <h1>Academic Management</h1>
+      <p style={{ marginTop: -8, color: "#555" }}>
+        Logged in as: <b>{user?.username || user?.role || "User"}</b>
+      </p>
+
+      {/* Modals */}
       <ConfirmModal
-        isOpen={isModalOpen}
-        message={modalMessage}
-        onConfirm={() => { modalAction(); setIsModalOpen(false); }}
-        onCancel={() => setIsModalOpen(false)}
-        isAlert={isModalAlert}
+        isOpen={infoOpen}
+        message={infoMsg}
+        onConfirm={() => setInfoOpen(false)}
+        onCancel={() => setInfoOpen(false)}
+        isAlert={true}
       />
-      <h1>Academic Management (Subjects)</h1>
+
+      <ConfirmModal
+        isOpen={deleteOpen}
+        message={
+          deleteTarget
+            ? `Delete subject: ${deleteTarget.subjectName} (${deleteTarget.subjectCode})?`
+            : "Delete subject?"
+        }
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteOpen(false)}
+        isAlert={false}
+      />
+
+      {/* Form */}
       <div className="sub-section">
-        <h2>{isEditing ? 'Edit Subject' : 'Add/Edit Subject'}</h2>
-        <form id="subjectForm" onSubmit={handleSubmit} className="academic-form">
-          <div className="form-group">
-            <label htmlFor="subjectName" className="form-label">Subject Name:</label>
-            <input
-              type="text"
-              id="subjectName"
-              placeholder="e.g., Mathematics"
-              value={newSubject.subjectName}
-              onChange={handleChange}
-              className={`form-input ${formErrors.subjectName ? 'form-input-error' : ''}`}
-            />
-            {formErrors.subjectName && <p className="error-message">{formErrors.subjectName}</p>}
-          </div>
-          <div className="form-group">
-            <label htmlFor="subjectCode" className="form-label">Subject Code:</label>
-            <input
-              type="text"
-              id="subjectCode"
-              placeholder="e.g., MATH101"
-              value={newSubject.subjectCode}
-              onChange={handleChange}
-              readOnly={isEditing}
-              disabled={isEditing}
-              className={`form-input ${formErrors.subjectCode ? 'form-input-error' : ''} ${isEditing ? 'form-input-disabled' : ''}`}
-            />
-            {formErrors.subjectCode && <p className="error-message">{formErrors.subjectCode}</p>}
-          </div>
-          <div className="form-actions">
-            <button type="submit" className="form-submit-btn">
-              {submitButtonText}
+        <h2>{isEditing ? "Edit Subject" : "Add Subject"}</h2>
+
+        <form onSubmit={handleSubmit} style={{ display: "grid", gap: 10, maxWidth: 700 }}>
+          <input
+            id="subjectName"
+            value={form.subjectName}
+            onChange={handleChange}
+            placeholder="Subject Name (e.g. Mathematics)"
+          />
+          {formErrors.subjectName && <p className="error-text">{formErrors.subjectName}</p>}
+
+          <input
+            id="subjectCode"
+            value={form.subjectCode}
+            onChange={handleChange}
+            placeholder="Subject Code (e.g. MTH101)"
+            readOnly={isEditing} // prevent changing codes during edit
+          />
+          {formErrors.subjectCode && <p className="error-text">{formErrors.subjectCode}</p>}
+          {isEditing && (
+            <small style={{ color: "#666" }}>
+              Subject code is locked during editing to avoid duplicates.
+            </small>
+          )}
+
+          <input
+            id="classLevel"
+            value={form.classLevel}
+            onChange={handleChange}
+            placeholder="Class Level (optional e.g. JSS1, SS2)"
+          />
+
+          <select id="status" value={form.status} onChange={handleChange}>
+            <option value="Active">Active</option>
+            <option value="Inactive">Inactive</option>
+          </select>
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button type="submit" disabled={submitting}>
+              {submitting ? "Saving..." : isEditing ? "Update Subject" : "Add Subject"}
             </button>
-            <button type="button" onClick={clearSearchAndForm} className="form-clear-btn">
+            <button type="button" onClick={resetForm} disabled={submitting} style={{ background: "#6c757d" }}>
               Clear Form
             </button>
           </div>
         </form>
       </div>
+
+      {/* List */}
       <div className="sub-section">
-        <h2>Existing Subjects</h2>
-        <div className="filter-controls">
+        <h2>Subjects</h2>
+
+        <div className="filter-controls" style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <input
             type="text"
-            id="subjectSearchFilter"
-            placeholder="Search by Name or Code"
+            placeholder="Search by subject name, code, class level..."
             value={searchTerm}
-            onChange={handleSearchChange}
-            className="filter-input"
+            onChange={(e) => setSearchTerm(e.target.value)}
+            style={{ flex: 1, minWidth: 250 }}
           />
-          <button onClick={clearSearchAndForm} className="filter-clear-btn">
-            Clear Filter / Reset Form
+          <button type="button" onClick={() => setSearchTerm("")} style={{ background: "#6c757d" }}>
+            Clear
           </button>
         </div>
-        <div className="table-container">
-          <table className="subject-table">
+
+        <div className="table-container" style={{ marginTop: 10 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
-                <th>Subject Name</th>
-                <th>Subject Code</th>
-                <th>Actions</th>
+                <th style={th}>Name</th>
+                <th style={th}>Code</th>
+                <th style={th}>Class Level</th>
+                <th style={th}>Status</th>
+                <th style={th}>Actions</th>
               </tr>
             </thead>
+
             <tbody>
-              {filteredSubjects.length > 0 ? (
-                filteredSubjects.map((subject, index) => (
-                  <tr key={subject._id} className={index % 2 === 0 ? 'even-row' : 'odd-row'}>
-                    <td>{subject.subjectName}</td>
-                    <td>{subject.subjectCode}</td>
-                    <td className="table-actions">
-                      <button
-                        className="action-btn edit-btn"
-                        onClick={() => editSubject(subject.subjectCode)}>
-                        Edit
-                      </button>
-                      <button
-                        className="action-btn delete-btn"
-                        onClick={() => deleteSubject(subject.subjectCode)}>
+              {filteredSubjects.length ? (
+                filteredSubjects.map((s) => (
+                  <tr key={s._id}>
+                    <td style={td}>{s.subjectName}</td>
+                    <td style={td}><b>{s.subjectCode}</b></td>
+                    <td style={td}>{s.classLevel || "-"}</td>
+                    <td style={td}>{s.status || "Active"}</td>
+                    <td style={td}>
+                      <button onClick={() => startEdit(s)}>Edit</button>{" "}
+                      <button onClick={() => askDelete(s)} style={{ background: "#dc2626" }}>
                         Delete
                       </button>
                     </td>
@@ -365,7 +356,9 @@ function AcademicManagement() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan="3" className="no-data">No subjects found.</td>
+                  <td style={td} colSpan="5">
+                    No subjects found.
+                  </td>
                 </tr>
               )}
             </tbody>
@@ -375,5 +368,17 @@ function AcademicManagement() {
     </div>
   );
 }
+
+const th = {
+  border: "1px solid #ddd",
+  padding: 8,
+  background: "#f2f2f2",
+  textAlign: "left",
+};
+
+const td = {
+  border: "1px solid #ddd",
+  padding: 8,
+};
 
 export default AcademicManagement;

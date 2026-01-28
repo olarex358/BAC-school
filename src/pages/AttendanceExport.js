@@ -1,139 +1,88 @@
-// src/pages/AttendanceExport.js
-import React, { useState } from 'react';
-import useLocalStorage from '../hooks/useLocalStorage';
-import Header from '../components/Header';
-import Footer from '../components/Footer';
-
-const ALLOWED_ROLES = ['Admin', 'Principal', 'Super Admin'];
+import React, { useEffect, useMemo, useState } from "react";
+import { apiFetch } from "../api";
 
 function AttendanceExport() {
-  const user = JSON.parse(localStorage.getItem('loggedInUser'));
+  const [records, setRecords] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
 
-  const [attendance] = useLocalStorage(
-    'schoolPortalAttendance',
-    [],
-    'http://localhost:5000/api/schoolPortalAttendance'
-  );
+  const [classFilter, setClassFilter] = useState("");
 
-  const [students] = useLocalStorage(
-    'schoolPortalStudents',
-    [],
-    'http://localhost:5000/api/schoolPortalStudents'
-  );
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      setErr(null);
+      try {
+        const res = await apiFetch("/api/schoolPortalAttendance");
+        if (!res.ok) throw new Error("Failed to fetch attendance");
+        const data = await res.json().catch(() => []);
+        setRecords(Array.isArray(data) ? data : []);
+      } catch (e) {
+        setErr(e.message || "Load failed");
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+  }, []);
 
-  const [selectedClass, setSelectedClass] = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+  const classes = useMemo(() => {
+    const list = records.map((r) => r.classSelect).filter(Boolean);
+    return [...new Set(list)].sort();
+  }, [records]);
 
-  if (!user || !ALLOWED_ROLES.includes(user.role)) {
-    return <div className="content-section">Access Denied</div>;
-  }
-
-  const classes = [...new Set(students.map(s => s.studentClass))].sort();
+  const filtered = useMemo(() => {
+    return records.filter((r) => !classFilter || r.classSelect === classFilter);
+  }, [records, classFilter]);
 
   const exportCSV = () => {
-    if (!selectedClass || !startDate || !endDate) return;
+    const header = ["date", "class", "student", "status", "markedBy"];
+    const rows = filtered.map((r) => [
+      String(r.date || r.markedAt || "").slice(0, 10),
+      r.classSelect || "",
+      r.studentNameSelect || r.admissionNo || "",
+      r.status || "",
+      r.markedBy || "",
+    ]);
 
-    const filtered = attendance.filter(r =>
-      r.class === selectedClass &&
-      r.date >= startDate &&
-      r.date <= endDate
-    );
+    const csv = [header, ...rows]
+      .map((row) =>
+        row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")
+      )
+      .join("\n");
 
-    if (filtered.length === 0) {
-      alert('No attendance records found.');
-      return;
-    }
-
-    const headers = [
-      'Date',
-      'Class',
-      'Admission No',
-      'Student Name',
-      'Status',
-      'Marked By',
-      'Teacher'
-    ];
-
-    const rows = filtered.map(r => {
-      const student = students.find(s => s.admissionNo === r.studentId);
-      return [
-        r.date,
-        r.class,
-        r.studentId,
-        student ? `${student.firstName} ${student.lastName}` : 'Unknown',
-        r.status,
-        r.markedBy,
-        r.classTeacherName || ''
-      ];
-    });
-
-    let csvContent =
-      headers.join(',') + '\n' +
-      rows.map(r => r.join(',')).join('\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
 
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `Attendance_${selectedClass}_${startDate}_to_${endDate}.csv`;
-    link.click();
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `attendance_export${classFilter ? `_${classFilter}` : ""}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
+  if (loading) return <div className="content-section">Loading export data…</div>;
+  if (err) return <div className="content-section" style={{ color: "red" }}>{err}</div>;
+
   return (
-    <>
-      <Header user={user} />
-      <div className="content-section">
-        <h1>Attendance Export</h1>
+    <div className="content-section">
+      <h1>Attendance Export</h1>
 
-        <div className="filter-grid">
-          <div className="form-group">
-            <label>Class</label>
-            <select
-              value={selectedClass}
-              onChange={e => setSelectedClass(e.target.value)}
-            >
-              <option value="">-- Select Class --</option>
-              {classes.map(cls => (
-                <option key={cls} value={cls}>{cls}</option>
-              ))}
-            </select>
-          </div>
+      <div className="sub-section" style={{ display: "grid", gap: 10, maxWidth: 600 }}>
+        <select value={classFilter} onChange={(e) => setClassFilter(e.target.value)}>
+          <option value="">All Classes</option>
+          {classes.map((c) => (
+            <option key={c} value={c}>{c}</option>
+          ))}
+        </select>
 
-          <div className="form-group">
-            <label>Start Date</label>
-            <input
-              type="date"
-              value={startDate}
-              onChange={e => setStartDate(e.target.value)}
-            />
-          </div>
+        <button onClick={exportCSV}>Export CSV</button>
 
-          <div className="form-group">
-            <label>End Date</label>
-            <input
-              type="date"
-              value={endDate}
-              onChange={e => setEndDate(e.target.value)}
-            />
-          </div>
-
-          <button
-            onClick={exportCSV}
-            disabled={!selectedClass || !startDate || !endDate}
-            className="form-submit-btn"
-          >
-            Export CSV
-          </button>
+        <div style={{ color: "#555" }}>
+          Export rows: <b>{filtered.length}</b>
         </div>
-
-        <p className="mt-3">
-          Exported file is Excel-ready and inspection-safe.
-        </p>
       </div>
-      <Footer />
-    </>
+    </div>
   );
 }
 

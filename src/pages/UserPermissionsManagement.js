@@ -1,408 +1,621 @@
-// src/pages/UserPermissionsManagement.js
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import useLocalStorage from '../hooks/useLocalStorage'; // Still useful for local data handling
-import ConfirmModal from '../components/ConfirmModal';
+import React, { useEffect, useMemo, useState } from "react";
+import { apiFetch } from "../api";
+import { useAuth } from "../context/AuthContext";
 
+/**
+ * User Permissions Management (Admin)
+ * Requires backend entity: /api/schoolPortalUsers
+ * CRUD:
+ *  - GET    /api/schoolPortalUsers
+ *  - POST   /api/schoolPortalUsers
+ *  - PUT    /api/schoolPortalUsers/:id
+ *  - DELETE /api/schoolPortalUsers/:id
+ */
 
-function UserPermissionsManagement() {
-  const navigate = useNavigate();
-  const [loggedInAdmin, setLoggedInAdmin] = useState(null);
+const ROLE_PRESETS = [
+  { type: "admin", role: "Super Admin" },
+  { type: "admin", role: "Admin" },
 
-  // 1. Data State (Using useLocalStorage for local state, fetching via useEffect)
-  const [users, setUsers] = useLocalStorage('schoolPortalUsers', []);
+  { type: "staff", role: "Teacher" },
+  { type: "staff", role: "Class Teacher" },
+  { type: "staff", role: "Non-Teaching" },
 
-  // NEW: State for API loading and fetching errors.
-  const [loadingUsers, setLoadingUsers] = useState(true);
-  const [fetchError, setFetchError] = useState(null);
+  { type: "accountant", role: "Accountant" },
+  { type: "student", role: "Student" },
+];
 
-  const initialUserState = {
-    username: '',
-    password: '',
-    role: ''
+const PERMISSIONS = [
+  "manage_students",
+  "manage_staff",
+  "manage_subjects",
+  "manage_results",
+  "approve_results",
+  "view_reports",
+  "manage_fees",
+  "manage_attendance",
+  "manage_timetable",
+  "manage_calendar",
+  "manage_syllabus",
+  "manage_library",
+  "manage_news",
+  "manage_messages",
+  "manage_certifications",
+];
+
+const initialCreate = {
+  username: "",
+  password: "",
+  type: "staff",
+  role: "Teacher",
+  isActivated: true,
+  extraPermissions: [],
+};
+
+export default function UserPermissionsManagement() {
+  const { user } = useAuth();
+
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+
+  const [search, setSearch] = useState("");
+
+  // Create
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createForm, setCreateForm] = useState(initialCreate);
+  const [creating, setCreating] = useState(false);
+
+  // Edit
+  const [editOpen, setEditOpen] = useState(false);
+  const [editForm, setEditForm] = useState(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  // Reset password
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetTarget, setResetTarget] = useState(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [resetting, setResetting] = useState(false);
+
+  // Delete
+  const [deletingId, setDeletingId] = useState(null);
+
+  const API_ENTITY = "/api/schoolPortalUsers";
+
+  const normalizeType = (t) => String(t || "").toLowerCase();
+
+  const safeActivated = (u) => {
+    if (typeof u.isActivated === "boolean") return u.isActivated;
+    if (typeof u.needsActivation === "boolean") return !u.needsActivation;
+    return true;
   };
 
-  const [newUser, setNewUser] = useState(initialUserState);
-  const [submitButtonText, setSubmitButtonText] = useState('Add User');
-  const [isEditing, setIsEditing] = useState(false);
-  const [editUserId, setEditUserId] = useState(null); // To store the MongoDB _id
-  const [searchTerm, setSearchTerm] = useState('');
-  const [formErrors, setFormErrors] = useState({});
-
-  // 2. MODAL STATE AND HELPERS (For alerts and confirmations)
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalMessage, setModalMessage] = useState('');
-  const [modalAction, setModalAction] = useState(() => {});
-  const [isModalAlert, setIsModalAlert] = useState(false);
-
-  const showConfirm = (msg, action) => {
-    setModalMessage(msg);
-    setModalAction(() => action);
-    setIsModalAlert(false); // Confirmation needs two buttons
-    setIsModalOpen(true);
-  };
-
-  const showAlert = (msg, action = () => {}) => {
-    setModalMessage(msg);
-    setModalAction(() => action);
-    setIsModalAlert(true); // Alert needs one button (OK)
-    setIsModalOpen(true);
-  };
-
-  // 3. CRITICAL FIX: Secure Fetch for Initial Data (GET)
-  const fetchUsers = async () => {
-    const adminToken = localStorage.getItem('adminToken');
-    setLoadingUsers(true);
-    setFetchError(null);
-
-    if (!adminToken) {
-        setFetchError('No Admin Token found. Please log in to view users.');
-        setLoadingUsers(false);
-        return;
-    }
-
+  const loadUsers = async () => {
+    setLoading(true);
+    setErr(null);
     try {
-        const response = await fetch('http://localhost:5000/api/schoolPortalUsers', {
-            method: 'GET',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${adminToken}`, // CRITICAL FIX
-            },
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.message || `Failed to fetch users (Status: ${response.status}).`);
-        }
-
-        const data = await response.json();
-        setUsers(data);
-
-    } catch (err) {
-        setFetchError(err.message || 'An unexpected error occurred during user fetch.');
-        console.error('Fetch error:', err);
+      const res = await apiFetch(API_ENTITY);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        // If backend not updated yet, you’ll see this:
+        // { message: "Entity not found" }
+        throw new Error(body.message || `Failed to load users (${res.status})`);
+      }
+      const data = await res.json().catch(() => []);
+      setUsers(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setErr(e.message || "Failed to load users");
     } finally {
-        setLoadingUsers(false);
+      setLoading(false);
     }
   };
-
 
   useEffect(() => {
-    const user = JSON.parse(localStorage.getItem('loggedInUser'));
-    if (user && user.type === 'admin') {
-      setLoggedInAdmin(user);
-    } else {
-      navigate('/login');
-      return;
-    }
-
-    fetchUsers();
-
+    loadUsers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const filteredUsers = useMemo(() => {
+    const t = search.trim().toLowerCase();
+    if (!t) return users;
+    return users.filter((u) => {
+      const blob = [
+        u.username,
+        u.type,
+        u.role,
+        Array.isArray(u.extraPermissions) ? u.extraPermissions.join(" ") : "",
+      ]
+        .map((x) => String(x || "").toLowerCase())
+        .join(" ");
+      return blob.includes(t);
+    });
+  }, [users, search]);
 
-  const validateForm = () => {
-    let errors = {};
-    if (!newUser.username.trim()) errors.username = 'Username is required.';
-    if (!isEditing && !newUser.password.trim()) errors.password = 'Password is required for new users.';
-    if (!newUser.role) errors.role = 'Role is required.';
-
-    setFormErrors(errors);
-    return Object.keys(errors).length === 0;
+  // ---------- Permission toggles ----------
+  const togglePermission = (arr, perm) => {
+    const set = new Set(Array.isArray(arr) ? arr : []);
+    if (set.has(perm)) set.delete(perm);
+    else set.add(perm);
+    return Array.from(set);
   };
 
-  const handleChange = (e) => {
-    const { id, value } = e.target;
-    setNewUser(prevUser => ({
-      ...prevUser,
-      [id]: value
-    }));
-    setFormErrors(prevErrors => ({
-      ...prevErrors,
-      [id]: ''
-    }));
-  };
-
-  // 4. CRITICAL FIX: Secure API call for submit (POST/PUT) - Now uses showAlert
-  const handleSubmit = async (e) => {
+  // ---------- Create ----------
+  const submitCreate = async (e) => {
     e.preventDefault();
-    if (!validateForm()) {
-      showAlert('Please correct the errors in the form.');
-      return;
-    }
+    if (creating) return;
 
-    const adminToken = localStorage.getItem('adminToken');
-    if (!adminToken) {
-        showAlert('Authentication failed: Admin token missing. Please log in.');
-        return;
-    }
+    if (!createForm.username.trim()) return alert("Username is required");
+    if (!createForm.password.trim()) return alert("Password is required");
 
-    const secureHeaders = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${adminToken}`, // CRITICAL FIX
+    const payload = {
+      username: createForm.username.trim(),
+      password: createForm.password,
+      type: normalizeType(createForm.type),
+      role: createForm.role,
+      isActivated: !!createForm.isActivated,
+      needsActivation: !createForm.isActivated,
+      extraPermissions: Array.isArray(createForm.extraPermissions)
+        ? createForm.extraPermissions
+        : [],
+      createdBy: user?.username || "admin",
+      createdAt: new Date().toISOString(),
     };
 
-    const payload = { ...newUser };
-    if (isEditing && !payload.password) {
-        // Remove password from payload if editing and it's blank
-        delete payload.password;
-    }
-
-
+    setCreating(true);
     try {
-        if (isEditing) {
-            const response = await fetch(`http://localhost:5000/api/schoolPortalUsers/${editUserId}`, {
-                method: 'PUT',
-                headers: secureHeaders,
-                body: JSON.stringify(payload),
-            });
-            if (response.ok) {
-                // Refresh data after successful update
-                await fetchUsers();
-                showAlert(`User **${newUser.username}** permissions updated successfully!`); // Success Alert
-            } else {
-                const errorData = await response.json();
-                showAlert(errorData.message || 'Failed to update user.');
-            }
-        } else {
-            const response = await fetch('http://localhost:5000/api/schoolPortalUsers', {
-                method: 'POST',
-                headers: secureHeaders,
-                body: JSON.stringify(payload),
-            });
-            if (response.ok) {
-                // Refresh data after successful creation
-                await fetchUsers();
-                showAlert(`New Admin User **${newUser.username}** added successfully!`); // Success Alert
-            } else {
-                const errorData = await response.json();
-                showAlert(errorData.message || 'Failed to add new user. Check if the username is already in use.');
-            }
-        }
-    } catch (err) {
-        showAlert('An unexpected error occurred. Please check your network connection.');
-    }
-
-    // Reset form state
-    setNewUser(initialUserState);
-    setSubmitButtonText('Add User');
-    setIsEditing(false);
-    setEditUserId(null);
-    setFormErrors({});
-  };
-
-  const editUser = (usernameToEdit) => {
-    const userToEdit = users.find(u => u.username === usernameToEdit);
-    if (userToEdit) {
-      setNewUser({
-          username: userToEdit.username,
-          password: '', // Password is reset when editing for security
-          role: userToEdit.role,
+      const res = await apiFetch(API_ENTITY, {
+        method: "POST",
+        body: JSON.stringify(payload),
       });
-      setSubmitButtonText('Update Permissions');
-      setIsEditing(true);
-      setEditUserId(userToEdit._id);
-      setFormErrors({});
-      // Optional: scroll to form
-      document.querySelector('.sub-section').scrollIntoView({ behavior: 'smooth' });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || `Create failed (${res.status})`);
+      }
+
+      const created = await res.json().catch(() => null);
+      if (created?._id) setUsers((prev) => [created, ...prev]);
+
+      setCreateForm(initialCreate);
+      setCreateOpen(false);
+      alert("User created ✅");
+    } catch (e2) {
+      alert(e2.message || "Create failed");
+    } finally {
+      setCreating(false);
     }
   };
 
-  // 5. CRITICAL FIX: Secure API call for delete - Now uses showConfirm
-  const deleteUser = (usernameToDelete) => {
-    showConfirm(
-      `Are you sure you want to delete admin user: **${usernameToDelete}**? This action cannot be undone.`,
-      async () => {
-        const adminToken = localStorage.getItem('adminToken');
-        if (!adminToken) {
-            showAlert('Authentication failed: Admin token missing. Please log in.');
-            return;
-        }
+  // ---------- Edit ----------
+  const openEdit = (u) => {
+    setEditForm({
+      _id: u._id,
+      username: u.username || "",
+      type: normalizeType(u.type),
+      role: u.role || "",
+      isActivated: safeActivated(u),
+      extraPermissions: Array.isArray(u.extraPermissions)
+        ? u.extraPermissions
+        : [],
+    });
+    setEditOpen(true);
+  };
 
-        const userToDelete = users.find(u => u.username === usernameToDelete);
-        if (!userToDelete) {
-            showAlert('User not found.');
-            return;
-        }
+  const saveEdit = async () => {
+    if (!editForm?._id || savingEdit) return;
 
-        try {
-            const response = await fetch(`http://localhost:5000/api/schoolPortalUsers/${userToDelete._id}`, {
-                method: 'DELETE',
-                headers: {
-                    'Authorization': `Bearer ${adminToken}`, // CRITICAL FIX
-                }
-            });
-            if (response.status === 204 || response.ok) {
-                // Filter locally on success
-                setUsers(prevUsers => prevUsers.filter(user => user.username !== usernameToDelete));
-                showAlert(`User **${usernameToDelete}** deleted successfully!`); // Success Alert
-            } else {
-                const errorData = await response.json();
-                showAlert(errorData.message || 'Failed to delete user.');
-            }
-        } catch (err) {
-            showAlert('An unexpected error occurred. Please check your network connection.');
-        }
+    const payload = {
+      type: normalizeType(editForm.type),
+      role: editForm.role,
+      isActivated: !!editForm.isActivated,
+      needsActivation: !editForm.isActivated,
+      extraPermissions: Array.isArray(editForm.extraPermissions)
+        ? editForm.extraPermissions
+        : [],
+      updatedBy: user?.username || "admin",
+      updatedAt: new Date().toISOString(),
+    };
+
+    setSavingEdit(true);
+    try {
+      const res = await apiFetch(`${API_ENTITY}/${editForm._id}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || `Update failed (${res.status})`);
       }
-    );
+
+      const updated = await res.json().catch(() => null);
+      if (updated?._id) {
+        setUsers((prev) => prev.map((x) => (x._id === updated._id ? updated : x)));
+      }
+
+      setEditOpen(false);
+      setEditForm(null);
+      alert("User updated ✅");
+    } catch (e2) {
+      alert(e2.message || "Update failed");
+    } finally {
+      setSavingEdit(false);
+    }
   };
 
-  const handleSearchChange = (e) => {
-    setSearchTerm(e.target.value);
+  // ---------- Reset password ----------
+  const openReset = (u) => {
+    setResetTarget(u);
+    setNewPassword("");
+    setResetOpen(true);
   };
 
-  const clearSearchAndForm = () => {
-    setSearchTerm('');
-    setNewUser(initialUserState);
-    setSubmitButtonText('Add User');
-    setIsEditing(false);
-    setEditUserId(null);
-    setFormErrors({});
+  const doResetPassword = async () => {
+    if (!resetTarget?._id || resetting) return;
+    if (!newPassword.trim()) return alert("Enter a new password");
+
+    setResetting(true);
+    try {
+      // We’ll implement backend to hash when password is provided in PUT
+      const res = await apiFetch(`${API_ENTITY}/${resetTarget._id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          password: newPassword,
+          updatedBy: user?.username || "admin",
+          updatedAt: new Date().toISOString(),
+        }),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || `Reset failed (${res.status})`);
+      }
+
+      setResetOpen(false);
+      setResetTarget(null);
+      setNewPassword("");
+      alert("Password reset ✅");
+    } catch (e2) {
+      alert(e2.message || "Reset failed");
+    } finally {
+      setResetting(false);
+    }
   };
 
-  const filteredUsers = users.filter(user =>
-    user.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    user.role.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // ---------- Delete ----------
+  const deleteUser = async (u) => {
+    if (!u?._id) return;
+    if (!window.confirm(`Delete user "${u.username}"?`)) return;
 
-  if (!loggedInAdmin || loadingUsers) {
-    return <div className="content-section">Loading user data...</div>;
-  }
+    setDeletingId(u._id);
+    try {
+      const res = await apiFetch(`${API_ENTITY}/${u._id}`, { method: "DELETE" });
 
-  if (fetchError) {
-      return (
-          <div className="content-section" style={{ color: '#dc3545', fontWeight: 'bold', padding: '20px', border: '1px solid #dc3545', borderRadius: '5px' }}>
-              Error fetching data: {fetchError}. Please log in or check the API connection.
-          </div>
-      );
-  }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || `Delete failed (${res.status})`);
+      }
+
+      setUsers((prev) => prev.filter((x) => x._id !== u._id));
+      alert("User deleted ✅");
+    } catch (e2) {
+      alert(e2.message || "Delete failed");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  // ---------- UI ----------
+  if (loading) return <div className="content-section">Loading users…</div>;
 
   return (
     <div className="content-section">
-      {/* RENDER THE CONFIRM MODAL */}
-      <ConfirmModal
-        isOpen={isModalOpen}
-        message={modalMessage}
-        onConfirm={() => { modalAction(); setIsModalOpen(false); }}
-        onCancel={() => setIsModalOpen(false)}
-        isAlert={isModalAlert}
-      />
-      <h1>User & Permissions Management</h1>
-      
-      <div className="sub-section">
-        <h2>{isEditing ? 'Update User Permissions' : 'Add New Admin User'}</h2>
-        
-        <form id="userPermissionsForm" onSubmit={handleSubmit} className="user-form">
-          
-          <div className="form-group">
-            <label htmlFor="username" className="form-label">Username:</label>
-            <input
-              type="text"
-              id="username"
-              placeholder="Unique Username"
-              value={newUser.username}
-              onChange={handleChange}
-              readOnly={isEditing}
-              disabled={isEditing}
-              className={`form-input ${formErrors.username ? 'form-input-error' : ''} ${isEditing ? 'form-input-disabled' : ''}`}
-            />
-            {formErrors.username && <p className="error-message">{formErrors.username}</p>}
+      <h1>User Permissions Management</h1>
+      <p style={{ marginTop: -8, color: "#555" }}>
+        Logged in as: <b>{user?.username || user?.role || "Admin"}</b>
+      </p>
+
+      {err && (
+        <div
+          style={{
+            padding: 10,
+            marginBottom: 15,
+            borderRadius: 6,
+            color: "white",
+            background: "#dc2626",
+          }}
+        >
+          {err}
+          <div style={{ marginTop: 6, fontSize: 13 }}>
+            If you see <b>"Entity not found"</b>, backend needs <b>schoolPortalUsers</b> entity added.
           </div>
-          
-          <div className="form-group">
-            <label htmlFor="password" className="form-label">{isEditing ? 'New Password (Leave blank to keep current)' : 'Password'}:</label>
+        </div>
+      )}
+
+      <div className="sub-section" style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search username/type/role/permissions…"
+          style={{ flex: 1, minWidth: 260 }}
+        />
+        <button onClick={() => setCreateOpen((p) => !p)}>
+          {createOpen ? "Close Create" : "+ Create User"}
+        </button>
+        <button onClick={loadUsers} style={{ background: "#6c757d" }}>
+          Refresh
+        </button>
+      </div>
+
+      {/* CREATE */}
+      {createOpen && (
+        <div className="sub-section" style={{ border: "1px solid #eee", borderRadius: 8 }}>
+          <h2>Create User</h2>
+
+          <form onSubmit={submitCreate} style={{ display: "grid", gap: 10, maxWidth: 900 }}>
+            <input
+              value={createForm.username}
+              onChange={(e) => setCreateForm((p) => ({ ...p, username: e.target.value }))}
+              placeholder="Username (e.g. BAC/STF/2026/0001)"
+            />
+
             <input
               type="password"
-              id="password"
-              placeholder={isEditing ? '********' : 'Password'}
-              value={newUser.password}
-              onChange={handleChange}
-              className={`form-input ${formErrors.password ? 'form-input-error' : ''}`}
+              value={createForm.password}
+              onChange={(e) => setCreateForm((p) => ({ ...p, password: e.target.value }))}
+              placeholder="Password"
             />
-            {formErrors.password && <p className="error-message">{formErrors.password}</p>}
-          </div>
-          
-          <div className="form-group">
-            <label htmlFor="role" className="form-label">Role:</label>
-            <select
-              id="role"
-              value={newUser.role}
-              onChange={handleChange}
-              className={`form-input ${formErrors.role ? 'form-input-error' : ''}`}
-            >
-              <option value="">Select Role</option>
-              <option value="admin">Admin</option>
-              <option value="principal">Principal</option>
-              <option value="Super Admin">Super Admin</option>
-              <option value="Student Manager">Student Manager</option>
-              <option value="Staff Manager">Staff Manager</option>
-              <option value="Results Manager">Results Manager</option>
-              <option value="Academic Manager">Academic Manager</option>
-              <option value="Fee Manager">Fee Manager</option>
-              <option value="View Reports">View Reports Only</option>
-              {/* Add other roles like HR, Bursar, etc. as needed */}
-            </select>
-            {formErrors.role && <p className="error-message">{formErrors.role}</p>}
-          </div>
-          
-          <div className="form-actions">
-            <button type="submit" className="form-submit-btn">
-              {submitButtonText}
-            </button>
-            <button type="button" onClick={clearSearchAndForm} className="form-clear-btn">
-              Clear Form
-            </button>
-          </div>
-        </form>
-      </div>
-      
-      <div className="sub-section">
-        <h2>Existing Admin Users</h2>
-        <div className="filter-controls">
-          <input
-            type="text"
-            id="userSearchFilter"
-            placeholder="Search by Username or Role"
-            value={searchTerm}
-            onChange={handleSearchChange}
-            className="filter-input"
-          />
-          <button onClick={clearSearchAndForm} className="filter-clear-btn">
-            Clear Filter / Reset Form
-          </button>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <select
+                value={createForm.type}
+                onChange={(e) => setCreateForm((p) => ({ ...p, type: e.target.value }))}
+              >
+                <option value="admin">admin</option>
+                <option value="staff">staff</option>
+                <option value="student">student</option>
+                <option value="accountant">accountant</option>
+              </select>
+
+              <select
+                value={createForm.role}
+                onChange={(e) => setCreateForm((p) => ({ ...p, role: e.target.value }))}
+              >
+                {ROLE_PRESETS.map((r) => (
+                  <option key={`${r.type}-${r.role}`} value={r.role}>
+                    {r.role}
+                  </option>
+                ))}
+              </select>
+
+              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={createForm.isActivated}
+                  onChange={(e) =>
+                    setCreateForm((p) => ({ ...p, isActivated: e.target.checked }))
+                  }
+                />
+                Activated
+              </label>
+            </div>
+
+            <div style={{ padding: 10, border: "1px solid #eee", borderRadius: 8 }}>
+              <b>Extra Permissions (optional)</b>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                  gap: 6,
+                  marginTop: 10,
+                }}
+              >
+                {PERMISSIONS.map((perm) => (
+                  <label key={perm} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <input
+                      type="checkbox"
+                      checked={(createForm.extraPermissions || []).includes(perm)}
+                      onChange={() =>
+                        setCreateForm((p) => ({
+                          ...p,
+                          extraPermissions: togglePermission(p.extraPermissions, perm),
+                        }))
+                      }
+                    />
+                    {perm}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button type="submit" disabled={creating}>
+                {creating ? "Creating..." : "Create User"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCreateForm(initialCreate);
+                  setCreateOpen(false);
+                }}
+                style={{ background: "#6c757d" }}
+                disabled={creating}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
         </div>
+      )}
+
+      {/* EDIT */}
+      {editOpen && editForm && (
+        <div className="sub-section" style={{ border: "1px solid #eee", borderRadius: 8 }}>
+          <h2>Edit User: {editForm.username}</h2>
+
+          <div style={{ display: "grid", gap: 10, maxWidth: 900 }}>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <select
+                value={editForm.type}
+                onChange={(e) => setEditForm((p) => ({ ...p, type: e.target.value }))}
+              >
+                <option value="admin">admin</option>
+                <option value="staff">staff</option>
+                <option value="student">student</option>
+                <option value="accountant">accountant</option>
+              </select>
+
+              <select
+                value={editForm.role}
+                onChange={(e) => setEditForm((p) => ({ ...p, role: e.target.value }))}
+              >
+                {ROLE_PRESETS.map((r) => (
+                  <option key={`${r.type}-${r.role}`} value={r.role}>
+                    {r.role}
+                  </option>
+                ))}
+              </select>
+
+              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={!!editForm.isActivated}
+                  onChange={(e) =>
+                    setEditForm((p) => ({ ...p, isActivated: e.target.checked }))
+                  }
+                />
+                Activated
+              </label>
+            </div>
+
+            <div style={{ padding: 10, border: "1px solid #eee", borderRadius: 8 }}>
+              <b>Extra Permissions</b>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                  gap: 6,
+                  marginTop: 10,
+                }}
+              >
+                {PERMISSIONS.map((perm) => (
+                  <label key={perm} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <input
+                      type="checkbox"
+                      checked={(editForm.extraPermissions || []).includes(perm)}
+                      onChange={() =>
+                        setEditForm((p) => ({
+                          ...p,
+                          extraPermissions: togglePermission(p.extraPermissions, perm),
+                        }))
+                      }
+                    />
+                    {perm}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button onClick={saveEdit} disabled={savingEdit}>
+                {savingEdit ? "Saving..." : "Save Changes"}
+              </button>
+              <button
+                onClick={() => {
+                  setEditOpen(false);
+                  setEditForm(null);
+                }}
+                style={{ background: "#6c757d" }}
+                disabled={savingEdit}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* RESET PASSWORD */}
+      {resetOpen && resetTarget && (
+        <div className="sub-section" style={{ border: "1px solid #eee", borderRadius: 8 }}>
+          <h2>Reset Password: {resetTarget.username}</h2>
+
+          <div style={{ display: "grid", gap: 10, maxWidth: 520 }}>
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="New password"
+            />
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button onClick={doResetPassword} disabled={resetting}>
+                {resetting ? "Resetting..." : "Reset Password"}
+              </button>
+              <button
+                onClick={() => {
+                  setResetOpen(false);
+                  setResetTarget(null);
+                  setNewPassword("");
+                }}
+                style={{ background: "#6c757d" }}
+                disabled={resetting}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TABLE */}
+      <div className="sub-section">
+        <h2>Users ({filteredUsers.length})</h2>
+
         <div className="table-container">
-          <table className="user-table">
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
-                <th>Username</th>
-                <th>Role</th>
-                <th>Actions</th>
+                <th style={th}>Username</th>
+                <th style={th}>Type</th>
+                <th style={th}>Role</th>
+                <th style={th}>Activated</th>
+                <th style={th}>Extra Permissions</th>
+                <th style={th}>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {filteredUsers.length > 0 ? (
-                filteredUsers.map((user, index) => (
-                  <tr key={user._id} className={index % 2 === 0 ? 'even-row' : 'odd-row'}>
-                    <td>{user.username}</td>
-                    <td>{user.role}</td>
-                    <td className="table-actions">
+              {filteredUsers.length ? (
+                filteredUsers.map((u) => (
+                  <tr key={u._id}>
+                    <td style={td}><b>{u.username}</b></td>
+                    <td style={td}>{normalizeType(u.type)}</td>
+                    <td style={td}>{u.role || "-"}</td>
+                    <td style={td}>{safeActivated(u) ? "Yes" : "No"}</td>
+                    <td style={td}>
+                      {Array.isArray(u.extraPermissions) && u.extraPermissions.length
+                        ? u.extraPermissions.join(", ")
+                        : "-"}
+                    </td>
+                    <td style={td}>
+                      <button onClick={() => openEdit(u)}>Edit</button>{" "}
+                      <button onClick={() => openReset(u)} style={{ background: "#2563eb" }}>
+                        Reset Password
+                      </button>{" "}
                       <button
-                        className="action-btn edit-btn"
-                        onClick={() => editUser(user.username)}>
-                        Edit
-                      </button>
-                      <button
-                        className="action-btn delete-btn"
-                        onClick={() => deleteUser(user.username)}>
-                        Delete
+                        onClick={() => deleteUser(u)}
+                        style={{ background: "#dc2626" }}
+                        disabled={deletingId === u._id}
+                      >
+                        {deletingId === u._id ? "Deleting..." : "Delete"}
                       </button>
                     </td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan="3" className="no-data">No admin users found.</td>
+                  <td style={td} colSpan="6">
+                    No users found.
+                  </td>
                 </tr>
               )}
             </tbody>
@@ -413,4 +626,14 @@ function UserPermissionsManagement() {
   );
 }
 
-export default UserPermissionsManagement;
+const th = {
+  border: "1px solid #ddd",
+  padding: 8,
+  background: "#f2f2f2",
+  textAlign: "left",
+};
+
+const td = {
+  border: "1px solid #ddd",
+  padding: 8,
+};
