@@ -1,205 +1,222 @@
+// src/services/offlineApi.js
 import { offlineDB, entityStoreMap } from "../utils/offlineDB";
 
+const BASE_URL =
+  (process.env.REACT_APP_API_URL || "https://school-portal-backend-i29s.onrender.com") + "/api";
+
 class OfflineApiService {
-  constructor(baseUrl = "http://localhost:5000/api") {
+  constructor(baseUrl = BASE_URL) {
     this.baseUrl = baseUrl;
     this.isOnline = navigator.onLine;
     this.syncInProgress = false;
 
-    this.setupNetworkListeners();
-  }
-
-  /* ================= NETWORK ================= */
-  setupNetworkListeners() {
     window.addEventListener("online", () => {
-      console.log("🌐 Network: Online");
       this.isOnline = true;
-      this.triggerSync();
+      this.syncPendingOperations(); // ✅ ONLY HERE
     });
 
     window.addEventListener("offline", () => {
-      console.log("📴 Network: Offline");
       this.isOnline = false;
     });
   }
 
-  /* ================= AUTH ================= */
-  getAuthHeaders() {
-    const token = localStorage.getItem("token") || "";
-    const adminToken = localStorage.getItem("adminToken") || "";
-
-    return {
-      "Content-Type": "application/json",
-      Authorization: token
-        ? `Bearer ${token}`
-        : adminToken
-        ? `Bearer ${adminToken}`
-        : "",
-    };
+  getToken() {
+    return localStorage.getItem("token") || localStorage.getItem("authToken") || "";
   }
 
-  /* ================= GET ================= */
+  getAuthHeaders(extra = {}) {
+    const token = this.getToken();
+    const headers = { "Content-Type": "application/json", ...extra };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return headers;
+  }
+
+  cleanForServer(data) {
+    const payload = { ...(data || {}) };
+    // remove local-only fields
+    delete payload._local;
+    delete payload.createdAt;
+    delete payload.updatedAt;
+
+    // IMPORTANT: do not send local_* ids to Mongo
+    if (typeof payload._id === "string" && payload._id.startsWith("local_")) delete payload._id;
+    if (typeof payload.id === "string" && payload.id.startsWith("local_")) delete payload.id;
+
+    return payload;
+  }
+
+  // ---------- READ (local-first) ----------
   async get(entityName, id = null) {
     const storeName = entityStoreMap[entityName];
     if (!storeName) return id ? null : [];
 
     if (id) {
       const item = await offlineDB.getById(storeName, id);
-      if (!item) return null;
-
-      return {
-        ...item,
-        _id: item._id || item.id,
-      };
+      return item ? { ...item, _id: item._id || item.id } : null;
     }
 
     const items = await offlineDB.getAll(storeName);
-    return items.map(item => ({
-      ...item,
-      _id: item._id || item.id,
-    }));
+    return (items || []).map((item) => ({ ...item, _id: item._id || item.id }));
   }
 
-  /* ================= CREATE (POST) ================= */
-  async post(entityName, data) {
+  // ---------- CREATE ----------
+  async create(entityName, data) {
     const storeName = entityStoreMap[entityName];
     if (!storeName) return null;
 
-    const localId = "local_" + Date.now();
-
+    // Always keep a local copy
+    const localId = `local_${Date.now()}`;
     const record = {
       ...data,
-      _id: localId,        // ✅ primary ID
-      id: localId,         // ⚠️ fallback (legacy safety)
+      _id: localId,
+      id: localId,
       _local: true,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-
     await offlineDB.put(storeName, record);
 
-    await offlineDB.addToSyncQueue({
-      type: "POST",
-      entityName,
-      id: localId,
-      data: record,
-      status: "pending",
-    });
+    // If online, send immediately (backend is primary)
+    if (this.isOnline && this.getToken()) {
+      try {
+        const res = await fetch(`${this.baseUrl}/${entityName}`, {
+          method: "POST",
+          headers: this.getAuthHeaders(),
+          body: JSON.stringify(this.cleanForServer(record)),
+        });
 
-    this.triggerSync();
+        // If backend rejects, queue it
+        if (!res.ok) throw new Error(`POST failed: ${res.status}`);
+      } catch {
+        await offlineDB.addToSyncQueue({ type: "POST", entityName, data: record });
+      }
+    } else {
+      // Offline => queue only
+      await offlineDB.addToSyncQueue({ type: "POST", entityName, data: record });
+    }
+
     return record;
   }
 
-  /* ================= UPDATE (PUT) ================= */
-  async put(entityName, id, data) {
+  // ---------- UPDATE ----------
+  async update(entityName, id, data) {
     const storeName = entityStoreMap[entityName];
     if (!storeName) return null;
 
-    const updated = {
-      ...data,
-      _id: id,        // ✅ primary ID
-      id,             // ⚠️ fallback
-      updatedAt: Date.now(),
-    };
-
+    const updated = { ...data, _id: id, id, updatedAt: Date.now() };
     await offlineDB.put(storeName, updated);
 
-    await offlineDB.addToSyncQueue({
-      type: "PUT",
-      entityName,
-      id,
-      data: updated,
-      status: "pending",
-    });
+    if (this.isOnline && this.getToken() && !String(id).startsWith("local_")) {
+      try {
+        const res = await fetch(`${this.baseUrl}/${entityName}/${id}`, {
+          method: "PUT",
+          headers: this.getAuthHeaders(),
+          body: JSON.stringify(this.cleanForServer(updated)),
+        });
+        if (!res.ok) throw new Error(`PUT failed: ${res.status}`);
+      } catch {
+        await offlineDB.addToSyncQueue({ type: "PUT", entityName, recordId: id, data: updated });
+      }
+    } else {
+      await offlineDB.addToSyncQueue({ type: "PUT", entityName, recordId: id, data: updated });
+    }
 
-    this.triggerSync();
     return updated;
   }
 
-  /* ================= DELETE ================= */
-  async delete(entityName, id) {
+  // ---------- DELETE ----------
+  async remove(entityName, id) {
     const storeName = entityStoreMap[entityName];
     if (!storeName) return false;
 
     await offlineDB.delete(storeName, id);
 
-    await offlineDB.addToSyncQueue({
-      type: "DELETE",
-      entityName,
-      id,
-      status: "pending",
-    });
+    if (this.isOnline && this.getToken() && !String(id).startsWith("local_")) {
+      try {
+        const res = await fetch(`${this.baseUrl}/${entityName}/${id}`, {
+          method: "DELETE",
+          headers: this.getAuthHeaders(),
+        });
+        if (!res.ok) throw new Error(`DELETE failed: ${res.status}`);
+      } catch {
+        await offlineDB.addToSyncQueue({ type: "DELETE", entityName, recordId: id });
+      }
+    } else {
+      await offlineDB.addToSyncQueue({ type: "DELETE", entityName, recordId: id });
+    }
 
-    this.triggerSync();
     return true;
   }
 
-  /* ================= SYNC ENGINE ================= */
+  // ---------- SYNC (ONLY on online event) ----------
   async syncPendingOperations() {
     if (!this.isOnline || this.syncInProgress) return;
+    const token = this.getToken();
+    if (!token) return;
 
     this.syncInProgress = true;
-    const queue = await offlineDB.getSyncQueue();
 
-    for (const job of queue) {
-      try {
-        const recordId = job.data?._id || job.id;
+    try {
+      const queue = await offlineDB.getSyncQueue();
 
-        const url =
-          job.type === "POST"
-            ? `${this.baseUrl}/${job.entityName}`
-            : `${this.baseUrl}/${job.entityName}/${recordId}`;
+      for (const job of queue) {
+        try {
+          const id = job.recordId || job.data?._id;
 
-        await fetch(url, {
-          method: job.type,
-          headers: this.getAuthHeaders(),
-          body: job.type === "DELETE" ? null : JSON.stringify(job.data),
-        });
+          // don't attempt PUT/DELETE for local-only ids
+          if ((job.type === "PUT" || job.type === "DELETE") && String(id).startsWith("local_")) {
+            await offlineDB.removeFromQueue(job.id);
+            continue;
+          }
 
-        await offlineDB.removeFromQueue(job.id);
-      } catch (err) {
-        console.error("❌ Sync failed:", err);
+          const url =
+            job.type === "POST"
+              ? `${this.baseUrl}/${job.entityName}`
+              : `${this.baseUrl}/${job.entityName}/${id}`;
+
+          const options =
+            job.type === "DELETE"
+              ? { method: "DELETE", headers: this.getAuthHeaders() }
+              : {
+                  method: job.type,
+                  headers: this.getAuthHeaders(),
+                  body: JSON.stringify(this.cleanForServer(job.data)),
+                };
+
+          const res = await fetch(url, options);
+
+          // stop syncing if auth fails
+          if (res.status === 401) break;
+
+          // remove permanently on bad payload/duplicate
+          if (res.status === 400 || res.status === 409) {
+            await offlineDB.removeFromQueue(job.id);
+            continue;
+          }
+
+          if (!res.ok) continue;
+
+          await offlineDB.removeFromQueue(job.id);
+        } catch {
+          // keep queued
+        }
       }
+    } finally {
+      this.syncInProgress = false;
     }
-
-    this.syncInProgress = false;
-  }
-
-  triggerSync() {
-    if (this.isOnline) {
-      setTimeout(() => this.syncPendingOperations(), 1000);
-    }
-  }
-
-  /* ================= STATUS ================= */
-  async getQueuedCount() {
-    const queue = await offlineDB.getSyncQueue();
-    return queue.length;
   }
 
   async getSyncStatus() {
     const queue = await offlineDB.getSyncQueue();
     return {
+      isOnline: this.isOnline,
+      syncInProgress: this.syncInProgress,
       total: queue.length,
-      pending: queue.filter(q => q.status === "pending").length,
+      pending: queue.filter((q) => q.status === "pending").length,
       items: queue,
     };
   }
-
-  /* ================= ALIASES ================= */
-  async create(entityName, data) {
-    return this.post(entityName, data);
-  }
-
-  async update(entityName, id, data) {
-    return this.put(entityName, id, data);
-  }
-
-  async remove(entityName, id) {
-    return this.delete(entityName, id);
-  }
 }
 
-/* ================= EXPORT ================= */
 export const offlineApi = new OfflineApiService();
 export default offlineApi;

@@ -1,168 +1,94 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { apiFetch } from "../api";
 import { useAuth } from "../context/AuthContext";
+import "./LoginPage.css";
 
-const API_BASE = "https://school-portal-backend-i29s.onrender.com";
+const normalize = (v) => String(v || "").toLowerCase();
 
-function LoginPage() {
+export default function LoginPage() {
+  const navigate = useNavigate();
+  const { login } = useAuth();
+
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  const navigate = useNavigate();
-  const { login, token, user } = useAuth();
+  const goDashboard = (u) => {
+    const type = normalize(u?.type);
+    if (type === "admin") return navigate("/dashboard");
+    if (type === "staff") return navigate("/staff-dashboard");
+    if (type === "student") return navigate("/student-dashboard");
+    if (type === "accountant") return navigate("/accountant-dashboard");
+    return navigate("/dashboard");
+  };
 
-  /* ==========================
-     🔒 BLOCK LOGIN IF ALREADY AUTHED
-  ========================== */
-  useEffect(() => {
-    if (token && user) {
-      navigate("/dashboard", { replace: true });
-    }
-  }, [token, user, navigate]);
-
-  /* ==========================
-     🔐 HANDLE LOGIN
-  ========================== */
   const handleLogin = async (e) => {
     e.preventDefault();
-
-    // HARD STOP double submit
     if (loading) return;
 
     setError("");
     setLoading(true);
 
-    console.group("🔐 LOGIN ATTEMPT");
-    console.log("Username:", username);
-
     try {
-      console.log("➡️ Sending login request (NO auth header)");
-
-      const res = await fetch(`${API_BASE}/api/login`, {
+      const res = await apiFetch("/api/login", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
         body: JSON.stringify({ username, password }),
       });
 
-      console.log("⬅️ Response status:", res.status);
-
-      const data = await res.json();
-      console.log("📦 Response body:", data);
+      const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        console.error("❌ Login failed");
-        setError(data.message || "Invalid login details");
-        console.groupEnd();
-        setLoading(false);
-        return;
+        throw new Error(data.message || "Login failed");
       }
 
-      // 🚨 DEFENSIVE CHECK (VERY IMPORTANT)
-      if (!data.user) {
-        console.error("❌ Backend returned no user object", data);
-        setError("Account data error. Please contact admin.");
-        console.groupEnd();
-        setLoading(false);
-        return;
+      if (!data.token || !data.user) {
+        throw new Error("Invalid login response (missing token/user)");
       }
 
-      // ✅ SAVE AUTH STATE
-      console.log("✅ Login successful. Saving auth state...");
       login(data.token, data.user);
 
-      // 🔑 FORCE ACTIVATION
-      if (data.user.needsActivation) {
-        console.warn("🟡 Needs activation → redirecting");
-        console.groupEnd();
-        navigate("/activate-account", { replace: true });
+      if (data.user.needsActivation === true || data.user.isActivated === false) {
+        navigate("/activate-account");
         return;
       }
 
-      // ✅ ROLE NORMALIZATION
-      const role =
-        data.user.type?.toLowerCase() ||
-        data.user.role?.toLowerCase() ||
-        "";
-
-      console.log("➡️ Redirecting by role:", role);
-      console.groupEnd();
-
-      switch (role) {
-        case "admin":
-        case "super admin":
-          navigate("/dashboard", { replace: true });
-          break;
-
-        case "student":
-          navigate("/student-dashboard", { replace: true });
-          break;
-
-        case "teacher":
-        case "class teacher":
-        case "staff":
-          navigate("/staff-dashboard", { replace: true });
-          break;
-
-        case "accountant":
-          navigate("/accountant-dashboard", { replace: true });
-          break;
-
-        default:
-          console.warn("⚠️ Unknown role, redirecting to dashboard");
-          navigate("/dashboard", { replace: true });
-      }
+      goDashboard(data.user);
     } catch (err) {
-      console.error("🔥 LOGIN EXCEPTION:", err);
-      setError("Network error. Please try again.");
-      console.groupEnd();
+      setError(err.message || "Login failed");
     } finally {
       setLoading(false);
     }
   };
 
-  /* ==========================
-     🧾 UI
-  ========================== */
   return (
-    <div className="login-page">
-      <div className="login-form">
+    <div className="login-container">
+      <form className="login-form" onSubmit={handleLogin}>
         <h2>Login</h2>
 
-        <form
-          onSubmit={(e) => {
-            if (loading) return;
-            handleLogin(e);
-          }}
-        >
-          <input
-            type="text"
-            placeholder="Admission No / Staff ID"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            required
-          />
+        {error ? <div className="error-box">{error}</div> : null}
 
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
+        <input
+          type="text"
+          placeholder="Username (Admin / Staff ID / Admission No)"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          required
+        />
 
-          {error && <p style={{ color: "red" }}>{error}</p>}
+        <input
+          type="password"
+          placeholder="Password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+        />
 
-          <button type="submit" disabled={loading}>
-            {loading ? "Logging in..." : "Login"}
-          </button>
-        </form>
-      </div>
+        <button type="submit" disabled={loading}>
+          {loading ? "Logging in..." : "Login"}
+        </button>
+      </form>
     </div>
   );
 }
-
-export default LoginPage;

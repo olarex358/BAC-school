@@ -3,58 +3,45 @@ import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../api";
 import { useAuth } from "../context/AuthContext";
 
-function ActivateAccount() {
+export default function ActivateAccount() {
   const navigate = useNavigate();
   const { token, user, login, logout } = useAuth();
 
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState(null);
 
-  const canAccess = useMemo(() => !!token && !!user, [token, user]);
+  const canAccess = useMemo(() => Boolean(token && user), [token, user]);
 
-  const isActivated = useMemo(() => {
-    if (user?.isActivated === true) return true;
-    if (user?.needsActivation === false) return true;
-    return false;
-  }, [user]);
-
-  const userType = useMemo(() => {
-    const t = String(user?.type || "").toLowerCase();
-    if (t) return t;
-
-    const r = String(user?.role || "").toLowerCase();
-    if (r.includes("admin")) return "admin";
-    if (r.includes("staff") || r.includes("teacher")) return "staff";
-    if (r.includes("student")) return "student";
-    if (r.includes("accountant")) return "accountant";
-    return "staff";
+  const identifier = useMemo(() => {
+    return user?.staffId || user?.admissionNo || user?.username;
   }, [user]);
 
   const goDashboard = () => {
-    if (userType === "admin") return navigate("/dashboard");
-    if (userType === "staff") return navigate("/staff-dashboard");
-    if (userType === "student") return navigate("/student-dashboard");
-    if (userType === "accountant") return navigate("/accountant-dashboard");
-    navigate("/dashboard");
+    const t = String(user?.type || "").toLowerCase();
+    if (t === "admin") return navigate("/dashboard");
+    if (t === "staff") return navigate("/staff-dashboard");
+    if (t === "student") return navigate("/student-dashboard");
+    if (t === "accountant") return navigate("/accountant-dashboard");
+    return navigate("/dashboard");
   };
-
-  if (canAccess && isActivated) {
-    return (
-      <div className="content-section">
-        <h2>Account already activated</h2>
-        <button onClick={goDashboard}>Go to Dashboard</button>
-      </div>
-    );
-  }
 
   if (!canAccess) {
     return (
       <div className="content-section">
         <h2>Invalid activation access</h2>
-        <p>Please login with default password first.</p>
+        <p>Please login first.</p>
         <button onClick={() => navigate("/login")}>Go to Login</button>
+      </div>
+    );
+  }
+
+  if (user?.isActivated === true && user?.needsActivation !== true) {
+    return (
+      <div className="content-section">
+        <h2>Account already activated ✅</h2>
+        <button onClick={goDashboard}>Go to Dashboard</button>
       </div>
     );
   }
@@ -63,22 +50,9 @@ function ActivateAccount() {
     e.preventDefault();
     setMsg(null);
 
-    if (newPassword.length < 4) {
-      return setMsg({ type: "error", text: "Password too short" });
-    }
-
-    if (newPassword !== confirmPassword) {
-      return setMsg({ type: "error", text: "Passwords do not match" });
-    }
-
-    const identifier =
-      user?.staffId ||
-      user?.admissionNo ||
-      user?.username;
-
-    if (!identifier) {
-      return setMsg({ type: "error", text: "Missing user identifier" });
-    }
+    if (!identifier) return setMsg({ type: "error", text: "Missing identifier" });
+    if (password.length < 4) return setMsg({ type: "error", text: "Password too short" });
+    if (password !== confirm) return setMsg({ type: "error", text: "Passwords do not match" });
 
     setLoading(true);
     try {
@@ -86,47 +60,48 @@ function ActivateAccount() {
         method: "POST",
         body: JSON.stringify({
           username: identifier,
-          userType,
-          newPassword,
+          password: password,
         }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
         throw new Error(data.message || "Activation failed");
       }
 
+      // If backend returned token+user (our server.js does), update session
       if (data.token && data.user) {
         login(data.token, data.user);
-        setMsg({ type: "success", text: "Account activated!" });
-        setTimeout(goDashboard, 800);
+        setMsg({ type: "success", text: "Activated ✅ Redirecting..." });
+        setTimeout(goDashboard, 700);
       } else {
-        setMsg({
-          type: "success",
-          text: "Activated. Please login again.",
-        });
+        setMsg({ type: "success", text: "Activated ✅ Please login again." });
         setTimeout(() => {
           logout();
           navigate("/login");
-        }, 1200);
+        }, 900);
       }
     } catch (err) {
-      setMsg({ type: "error", text: err.message });
+      setMsg({ type: "error", text: err.message || "Activation failed" });
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="content-section" style={{ maxWidth: 500 }}>
+    <div className="content-section" style={{ maxWidth: 520 }}>
       <h2>Activate Account</h2>
+      <p style={{ color: "#666" }}>
+        Welcome <b>{identifier}</b>. Set a new password.
+      </p>
 
       {msg && (
         <div
           style={{
             padding: 10,
             marginBottom: 10,
+            borderRadius: 6,
             color: "#fff",
             background: msg.type === "success" ? "#16a34a" : "#dc2626",
           }}
@@ -135,26 +110,24 @@ function ActivateAccount() {
         </div>
       )}
 
-      <form onSubmit={handleActivate}>
+      <form onSubmit={handleActivate} style={{ display: "grid", gap: 10 }}>
         <input
           type="password"
           placeholder="New password"
-          value={newPassword}
-          onChange={(e) => setNewPassword(e.target.value)}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
         />
         <input
           type="password"
           placeholder="Confirm password"
-          value={confirmPassword}
-          onChange={(e) => setConfirmPassword(e.target.value)}
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
         />
-
-        <button disabled={loading}>
-          {loading ? "Activating..." : "Activate"}
-        </button>
+        <button disabled={loading}>{loading ? "Activating..." : "Activate"}</button>
 
         <button
           type="button"
+          style={{ background: "#6c757d" }}
           onClick={() => {
             logout();
             navigate("/login");
@@ -166,5 +139,3 @@ function ActivateAccount() {
     </div>
   );
 }
-
-export default ActivateAccount;
