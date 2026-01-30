@@ -48,7 +48,7 @@ function Dashboard() {
 
         {/* SIDEBAR */}
         <aside className="sidebar">
-          <h2>Busari-Alao College</h2>
+          <h2>Busarialao College</h2>
 
           <ul>
             <li><Link to="/dashboard">Dashboard</Link></li>
