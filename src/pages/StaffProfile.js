@@ -1,51 +1,91 @@
 // src/pages/StaffProfile.js
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import useLocalStorage from '../hooks/useLocalStorage';
-import ConfirmModal from '../components/ConfirmModal';
+import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import useLocalStorage from "../hooks/useLocalStorage";
+import ConfirmModal from "../components/ConfirmModal";
+import { useAuth } from "../context/AuthContext";
 
+const norm = (v) => String(v || "").trim();
 
 function StaffProfile() {
   const [staffInfo, setStaffInfo] = useState(null);
   const navigate = useNavigate();
+  const { user } = useAuth();
 
-  const [staffs] = useLocalStorage('schoolPortalStaff', [], 'http://localhost:5000/api/schoolPortalStaff');
-  const [subjects] = useLocalStorage('schoolPortalSubjects', [], 'http://localhost:5000/api/schoolPortalSubjects');
+  const [staffs] = useLocalStorage(
+    "schoolPortalStaff",
+    [],
+    "http://localhost:5000/api/schoolPortalStaff"
+  );
+
+  const [subjects] = useLocalStorage(
+    "schoolPortalSubjects",
+    [],
+    "http://localhost:5000/api/schoolPortalSubjects"
+  );
 
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalMessage, setModalMessage] = useState('');
+  const [modalMessage, setModalMessage] = useState("");
   const [isModalAlert, setIsModalAlert] = useState(false);
 
   useEffect(() => {
-    const loggedInUser = JSON.parse(localStorage.getItem('loggedInUser'));
-    if (loggedInUser && loggedInUser.type === 'staff') {
-      const detailedStaffInfo = staffs.find(s => s.staffId === loggedInUser.staffId);
-      if (detailedStaffInfo) {
-        setStaffInfo(detailedStaffInfo);
-      } else {
-        console.error("Logged-in staff not found in database.");
-        localStorage.removeItem('loggedInUser');
-        navigate('/login');
-      }
-    } else {
-      navigate('/login');
+    const legacyUser = JSON.parse(localStorage.getItem("loggedInUser"));
+    const activeUser = user || legacyUser;
+
+    if (!activeUser) {
+      navigate("/login");
+      return;
     }
-  }, [navigate, staffs]);
+
+    const type = String(activeUser.type || activeUser.userType || activeUser.role || "")
+      .toLowerCase();
+
+    if (!type.includes("staff") && !type.includes("teacher")) {
+      navigate("/login");
+      return;
+    }
+
+    const staffId =
+      norm(activeUser.staffId) ||
+      norm(activeUser.staffID) ||
+      norm(activeUser.username);
+
+    let found =
+      staffId && staffs.find((s) => norm(s.staffId) === staffId);
+
+    // ✅ If not found in staffs list, DO NOT redirect.
+    if (!found) {
+      found = {
+        firstname: activeUser.firstname || activeUser.firstName || "Staff",
+        surname: activeUser.surname || activeUser.lastName || "",
+        staffId: staffId || activeUser.staffId || "N/A",
+        role: activeUser.role || "Staff",
+        department: activeUser.department || "N/A",
+        contactEmail: activeUser.contactEmail || activeUser.email || "N/A",
+        contactPhone: activeUser.contactPhone || activeUser.phone || "N/A",
+        qualifications: activeUser.qualifications || "N/A",
+        assignedClasses: activeUser.assignedClasses || [],
+        assignedSubjects: activeUser.assignedSubjects || [],
+      };
+    }
+
+    setStaffInfo(found);
+  }, [navigate, staffs, user]);
 
   const getSubjectName = (subjectCode) => {
-    const subject = subjects.find(s => s.subjectCode === subjectCode);
+    const subject = subjects.find((s) => s.subjectCode === subjectCode);
     return subject ? subject.subjectName : subjectCode;
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('loggedInUser');
-    navigate('/home');
+    localStorage.removeItem("loggedInUser");
+    navigate("/login");
   };
 
   if (!staffInfo) {
     return <div className="content-section">Loading profile...</div>;
   }
-  
+
   return (
     <div className="content-section">
       <ConfirmModal
@@ -55,11 +95,15 @@ function StaffProfile() {
         onCancel={() => setIsModalOpen(false)}
         isAlert={isModalAlert}
       />
+
       <h1>My Profile</h1>
       <div className="profile-card">
         <div className="profile-details">
           <div className="profile-item">
-            <strong>Full Name:</strong> <span>{staffInfo.firstname} {staffInfo.surname}</span>
+            <strong>Full Name:</strong>{" "}
+            <span>
+              {staffInfo.firstname} {staffInfo.surname}
+            </span>
           </div>
           <div className="profile-item">
             <strong>Staff ID:</strong> <span>{staffInfo.staffId}</span>
@@ -77,17 +121,31 @@ function StaffProfile() {
             <strong>Phone:</strong> <span>{staffInfo.contactPhone}</span>
           </div>
           <div className="profile-item">
-            <strong>Qualifications:</strong> <span>{staffInfo.qualifications}</span>
+            <strong>Qualifications:</strong>{" "}
+            <span>{staffInfo.qualifications}</span>
           </div>
           <div className="profile-item">
-            <strong>Assigned Classes:</strong> <span>{staffInfo.assignedClasses && staffInfo.assignedClasses.length > 0 ? staffInfo.assignedClasses.join(', ') : 'N/A'}</span>
+            <strong>Assigned Classes:</strong>{" "}
+            <span>
+              {staffInfo.assignedClasses?.length
+                ? staffInfo.assignedClasses.join(", ")
+                : "N/A"}
+            </span>
           </div>
           <div className="profile-item">
-            <strong>Assigned Subjects:</strong> <span>{staffInfo.assignedSubjects && staffInfo.assignedSubjects.length > 0 ? staffInfo.assignedSubjects.map(getSubjectName).join(', ') : 'N/A'}</span>
+            <strong>Assigned Subjects:</strong>{" "}
+            <span>
+              {staffInfo.assignedSubjects?.length
+                ? staffInfo.assignedSubjects.map(getSubjectName).join(", ")
+                : "N/A"}
+            </span>
           </div>
         </div>
       </div>
-      <button onClick={handleLogout} className="logout-button">Logout</button>
+
+      <button onClick={handleLogout} className="logout-button">
+        Logout
+      </button>
     </div>
   );
 }

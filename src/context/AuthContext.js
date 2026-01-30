@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from "react";
 
 const AuthContext = createContext(null);
 
-/* normalize user type once */
+/* ✅ Normalize user type across the whole app */
 const normalizeType = (user) => {
   const raw =
     user?.type ||
@@ -11,20 +11,19 @@ const normalizeType = (user) => {
     user?.role ||
     "";
 
-  const t = String(raw).toLowerCase();
+  const t = String(raw).trim().toLowerCase();
 
   if (t.includes("student")) return "student";
   if (t.includes("staff") || t.includes("teacher")) return "staff";
   if (t.includes("accountant")) return "accountant";
-  if (t.includes("admin")) return "admin";
+  if (t.includes("admin") || t.includes("super")) return "admin";
 
-  return t;
+  // fallback (still return something stable)
+  return t || "student";
 };
 
 export function AuthProvider({ children }) {
-  const [token, setToken] = useState(() =>
-    localStorage.getItem("authToken")
-  );
+  const [token, setToken] = useState(() => localStorage.getItem("authToken"));
 
   const [user, setUser] = useState(() => {
     const saved = localStorage.getItem("authUser");
@@ -33,20 +32,23 @@ export function AuthProvider({ children }) {
 
   const isAuthed = !!token;
 
-  /* 🔁 keep storage in sync */
+  /* ✅ keep storage in sync (including legacy pages) */
   useEffect(() => {
     if (token) localStorage.setItem("authToken", token);
     else localStorage.removeItem("authToken");
 
     if (user) {
-      localStorage.setItem("authUser", JSON.stringify(user));
+      const fixedUser = { ...user, type: normalizeType(user) };
 
-      /* ✅ LEGACY SUPPORT (critical fix) */
+      // new system
+      localStorage.setItem("authUser", JSON.stringify(fixedUser));
+
+      // legacy system (many pages still depend on this)
       localStorage.setItem(
         "loggedInUser",
         JSON.stringify({
-          ...user,
-          type: normalizeType(user),
+          ...fixedUser,
+          type: fixedUser.type,
         })
       );
     } else {
@@ -55,15 +57,20 @@ export function AuthProvider({ children }) {
     }
   }, [token, user]);
 
+  /* ✅ IMPORTANT: ensure type is always set on login */
   const login = (newToken, newUser) => {
     console.log("🔐 AuthContext login()", newUser);
+    const fixedUser = { ...newUser, type: normalizeType(newUser) };
+
     setToken(newToken);
-    setUser(newUser);
+    setUser(fixedUser);
   };
 
   const logout = () => {
     setToken(null);
     setUser(null);
+
+    // hard cleanup
     localStorage.removeItem("authToken");
     localStorage.removeItem("authUser");
     localStorage.removeItem("loggedInUser");

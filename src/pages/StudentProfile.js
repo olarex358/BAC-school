@@ -1,85 +1,112 @@
 // src/pages/StudentProfile.js
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import useLocalStorage from '../hooks/useLocalStorage';
-import ConfirmModal from '../components/ConfirmModal';
-import '../styles/uncreated-pages.css';
+import React, { useState, useEffect, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
+import useLocalStorage from "../hooks/useLocalStorage";
+import ConfirmModal from "../components/ConfirmModal";
+import { useAuth } from "../context/AuthContext";
+import "../styles/uncreated-pages.css";
 
+const norm = (v) => String(v || "").trim();
 
 function StudentProfile() {
   const navigate = useNavigate();
+  const { user } = useAuth();
 
-  // Tabs
-  const [activeTab, setActiveTab] = useState('profile');
-
-  // Student
+  const [activeTab, setActiveTab] = useState("profile");
   const [studentProfile, setStudentProfile] = useState(null);
 
-  // Data
   const [students, , loadingStudents] = useLocalStorage(
-    'schoolPortalStudents',
+    "schoolPortalStudents",
     [],
-    'http://localhost:5000/api/schoolPortalStudents'
+    "http://localhost:5000/api/schoolPortalStudents"
   );
 
   const [results] = useLocalStorage(
-    'schoolPortalResults',
+    "schoolPortalResults",
     [],
-    'http://localhost:5000/api/schoolPortalResults'
+    "http://localhost:5000/api/schoolPortalResults"
   );
 
   const [attendance] = useLocalStorage(
-    'schoolPortalAttendance',
+    "schoolPortalAttendance",
     [],
-    'http://localhost:5000/api/schoolPortalAttendance'
+    "http://localhost:5000/api/schoolPortalAttendance"
   );
 
-  // Modal
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalMessage, setModalMessage] = useState('');
+  const [modalMessage, setModalMessage] = useState("");
   const [isModalAlert, setIsModalAlert] = useState(false);
 
-  // Auth + load student
   useEffect(() => {
-    const loggedInUser = JSON.parse(localStorage.getItem('loggedInUser'));
+    const legacyUser = JSON.parse(localStorage.getItem("loggedInUser"));
+    const activeUser = user || legacyUser;
 
-    if (!loggedInUser || loggedInUser.type !== 'student') {
-      navigate('/login');
+    // ✅ only redirect if NO auth at all
+    if (!activeUser) {
+      navigate("/login");
       return;
     }
 
-    const found = students.find(
-      s => s.admissionNo === loggedInUser.admissionNo
-    );
-
-    if (!found) {
-      localStorage.removeItem('loggedInUser');
-      navigate('/login');
+    // ✅ normalize type check
+    const type = String(activeUser.type || activeUser.userType || activeUser.role || "")
+      .toLowerCase();
+    if (!type.includes("student")) {
+      navigate("/login");
       return;
+    }
+
+    // ✅ try to match student record with multiple keys
+    const admissionNo =
+      norm(activeUser.admissionNo) ||
+      norm(activeUser.username) ||
+      norm(activeUser.admission_number);
+
+    let found =
+      admissionNo &&
+      students.find((s) => norm(s.admissionNo) === admissionNo);
+
+    // ✅ If not found in students list, DO NOT redirect.
+    // Fallback to activeUser so profile still opens.
+    if (!found) {
+      found = {
+        firstName: activeUser.firstName || activeUser.firstname || "Student",
+        lastName: activeUser.lastName || activeUser.surname || "",
+        admissionNo: admissionNo || activeUser.admissionNo || "N/A",
+        studentClass: activeUser.studentClass || activeUser.classLevel || "N/A",
+        dob: activeUser.dob || activeUser.dateOfBirth || "",
+        parentName: activeUser.parentName || activeUser.guardianName || "",
+        parentPhone: activeUser.parentPhone || activeUser.guardianPhone || "",
+        address: activeUser.address || "",
+        enrollmentDate: activeUser.enrollmentDate || "",
+        medicalNotes: activeUser.medicalNotes || "",
+      };
     }
 
     setStudentProfile(found);
-  }, [students, navigate]);
+  }, [students, user, navigate]);
 
   const handleLogout = () => {
-    localStorage.removeItem('loggedInUser');
-    navigate('/home');
+    localStorage.removeItem("loggedInUser");
+    navigate("/login");
   };
+
+  const myResults = useMemo(() => {
+    if (!studentProfile) return [];
+    return results.filter(
+      (r) =>
+        r.studentAdmissionNo === studentProfile.admissionNo &&
+        r.status === "Approved"
+    );
+  }, [results, studentProfile]);
+
+  const myAttendance = useMemo(() => {
+    if (!studentProfile) return [];
+    return attendance.filter((a) => a.studentId === studentProfile.admissionNo);
+  }, [attendance, studentProfile]);
 
   if (!studentProfile || loadingStudents) {
     return <div className="content-section">Loading profile...</div>;
   }
-
-  // Filter data for this student
-  const myResults = results.filter(
-    r =>
-      r.studentAdmissionNo === studentProfile.admissionNo &&
-      r.status === 'Approved'
-  );
-
-  const myAttendance = attendance.filter(
-    a => a.studentId === studentProfile.admissionNo
-  );
 
   return (
     <div className="content-section">
@@ -93,118 +120,79 @@ function StudentProfile() {
 
       <h1>My Profile</h1>
 
-      {/* TABS */}
       <div className="profile-tabs">
         <button
-          className={activeTab === 'profile' ? 'active' : ''}
-          onClick={() => setActiveTab('profile')}
+          className={activeTab === "profile" ? "active" : ""}
+          onClick={() => setActiveTab("profile")}
         >
           Profile
         </button>
         <button
-          className={activeTab === 'results' ? 'active' : ''}
-          onClick={() => setActiveTab('results')}
+          className={activeTab === "results" ? "active" : ""}
+          onClick={() => setActiveTab("results")}
         >
           Results
         </button>
         <button
-          className={activeTab === 'attendance' ? 'active' : ''}
-          onClick={() => setActiveTab('attendance')}
+          className={activeTab === "attendance" ? "active" : ""}
+          onClick={() => setActiveTab("attendance")}
         >
           Attendance
         </button>
       </div>
 
-      {/* PROFILE TAB */}
-      {activeTab === 'profile' && (
+      {activeTab === "profile" && (
         <div className="profile-card">
           <div className="profile-details">
-            <p><strong>Full Name:</strong> {studentProfile.firstName} {studentProfile.lastName}</p>
-            <p><strong>Admission No:</strong> {studentProfile.admissionNo}</p>
-            <p><strong>Class:</strong> {studentProfile.studentClass}</p>
-            <p><strong>Date of Birth:</strong> {studentProfile.dob}</p>
-            <p><strong>Parent Name:</strong> {studentProfile.parentName}</p>
-            <p><strong>Parent Phone:</strong> {studentProfile.parentPhone}</p>
-            <p><strong>Address:</strong> {studentProfile.address}</p>
-            <p><strong>Enrollment Date:</strong> {studentProfile.enrollmentDate}</p>
-            <p><strong>Medical Notes:</strong> {studentProfile.medicalNotes || 'N/A'}</p>
+            <p>
+              <strong>Full Name:</strong> {studentProfile.firstName}{" "}
+              {studentProfile.lastName}
+            </p>
+            <p>
+              <strong>Admission No:</strong> {studentProfile.admissionNo}
+            </p>
+            <p>
+              <strong>Class:</strong> {studentProfile.studentClass}
+            </p>
+            <p>
+              <strong>Date of Birth:</strong> {studentProfile.dob}
+            </p>
+            <p>
+              <strong>Parent Name:</strong> {studentProfile.parentName}
+            </p>
+            <p>
+              <strong>Parent Phone:</strong> {studentProfile.parentPhone}
+            </p>
+            <p>
+              <strong>Address:</strong> {studentProfile.address}
+            </p>
+            <p>
+              <strong>Enrollment Date:</strong> {studentProfile.enrollmentDate}
+            </p>
+            <p>
+              <strong>Medical Notes:</strong>{" "}
+              {studentProfile.medicalNotes || "N/A"}
+            </p>
           </div>
         </div>
       )}
 
-      {/* RESULTS TAB */}
-      {activeTab === 'results' && (
-  <div className="table-container">
-    <h3>My Results</h3>
+      {activeTab === "results" && (
+        <div className="table-container">
+          <h3>My Results</h3>
+          {myResults.length > 0 ? (
+            <p>Approved results found: {myResults.length}</p>
+          ) : (
+            <p>No approved results available.</p>
+          )}
+        </div>
+      )}
 
-    {myResults.length > 0 ? (
-      <table className="results-table">
-        <thead>
-          <tr>
-            <th>Term</th>
-            <th>Session</th>
-            <th>Subjects</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {[...new Set(myResults.map(r => `${r.termSelect}-${r.academicYear}`))]
-            .map(key => {
-              const [term, year] = key.split('-');
-              const count = myResults.filter(
-                r => r.termSelect === term && r.academicYear === year
-              ).length;
-
-              return (
-                <tr key={key}>
-                  <td>{term}</td>
-                  <td>{year}</td>
-                  <td>{count}</td>
-                  <td>
-                    <button
-                      onClick={() =>
-                        navigate(`/student-result/${term}/${year}`)
-                      }
-                    >
-                      View Result
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-        </tbody>
-      </table>
-    ) : (
-      <p>No approved results available.</p>
-    )}
-  </div>
-)}
-
-
-      {/* ATTENDANCE TAB */}
-      {activeTab === 'attendance' && (
+      {activeTab === "attendance" && (
         <div className="table-container">
           <h3>My Attendance</h3>
-
           {myAttendance.length > 0 ? (
-            <table className="attendance-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Class</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {myAttendance.map((a, i) => (
-                  <tr key={i}>
-                    <td>{a.date}</td>
-                    <td>{a.class}</td>
-                    <td>{a.status}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <p>Attendance records found: {myAttendance.length}</p>
           ) : (
             <p>No attendance records found.</p>
           )}
