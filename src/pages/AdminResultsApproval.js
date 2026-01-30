@@ -1,62 +1,97 @@
-// src/pages/AdminResultsApproval.js
 import React, { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../api";
 import { useAuth } from "../context/AuthContext";
 import BatchResultSlipPrint from "./results/BatchResultSlipPrint";
 
+const norm = (v) => String(v ?? "").trim();
+const readLS = (key, fallback = []) => {
+  try {
+    return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback));
+  } catch {
+    return fallback;
+  }
+};
+const writeLS = (key, value) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {}
+};
+
+function normalizeResult(r) {
+  return {
+    ...r,
+    studentAdmissionNo: r.studentAdmissionNo || r.studentNameSelect || r.admissionNo || "",
+    studentClass: r.studentClass || r.classSelect || r.classLevel || "",
+    academicYear: r.academicYear || r.sessionSelect || r.session || "",
+    termSelect: r.termSelect || r.term || "",
+    sessionSelect: r.sessionSelect || r.session || r.academicYear || "",
+    totalScore: r.totalScore ?? r.total ?? 0,
+  };
+}
+
 function AdminResultsApproval() {
   const { user } = useAuth();
 
-  const [pendingResults, setPendingResults] = useState([]);
-  const [approvedResults, setApprovedResults] = useState([]);
-  const [students, setStudents] = useState([]);
-  const [subjects, setSubjects] = useState([]);
-  const [staffs, setStaffs] = useState([]);
+  // ✅ offline-first
+  const [pendingResults, setPendingResults] = useState(() =>
+    readLS("schoolPortalPendingResults", []).map(normalizeResult)
+  );
+  const [approvedResults, setApprovedResults] = useState(() =>
+    readLS("schoolPortalResults", []).map(normalizeResult)
+  );
+  const [students, setStudents] = useState(() => readLS("schoolPortalStudents", []));
+  const [subjects, setSubjects] = useState(() => readLS("schoolPortalSubjects", []));
+  const [staffs, setStaffs] = useState(() => readLS("schoolPortalStaff", []));
 
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [message, setMessage] = useState(null);
   const [showBatchPrint, setShowBatchPrint] = useState(false);
 
-  /* ================= LOAD DATA ================= */
+  // Try online quietly (don’t wipe local on failure)
   useEffect(() => {
     const loadAll = async () => {
       setLoading(true);
       setError(null);
 
       try {
-        const [
-          pendingRes,
-          approvedRes,
-          studentsRes,
-          subjectsRes,
-          staffRes,
-        ] = await Promise.all([
-          apiFetch("/api/schoolPortalPendingResults"),
-          apiFetch("/api/schoolPortalResults"),
-          apiFetch("/api/schoolPortalStudents"),
-          apiFetch("/api/schoolPortalSubjects"),
-          apiFetch("/api/schoolPortalStaff"),
-        ]);
+        const [pendingRes, approvedRes, studentsRes, subjectsRes, staffRes] =
+          await Promise.all([
+            apiFetch("/api/schoolPortalPendingResults"),
+            apiFetch("/api/schoolPortalResults"),
+            apiFetch("/api/schoolPortalStudents"),
+            apiFetch("/api/schoolPortalSubjects"),
+            apiFetch("/api/schoolPortalStaff"),
+          ]);
 
-        if (
-          !pendingRes.ok ||
-          !approvedRes.ok ||
-          !studentsRes.ok ||
-          !subjectsRes.ok ||
-          !staffRes.ok
-        ) {
-          throw new Error("Failed to load approval data");
+        if (pendingRes.ok) {
+          const p = (await pendingRes.json().catch(() => [])) || [];
+          setPendingResults(p.map(normalizeResult));
+          writeLS("schoolPortalPendingResults", p);
         }
-
-        setPendingResults(await pendingRes.json());
-        setApprovedResults(await approvedRes.json());
-        setStudents(await studentsRes.json());
-        setSubjects(await subjectsRes.json());
-        setStaffs(await staffRes.json());
+        if (approvedRes.ok) {
+          const a = (await approvedRes.json().catch(() => [])) || [];
+          setApprovedResults(a.map(normalizeResult));
+          writeLS("schoolPortalResults", a);
+        }
+        if (studentsRes.ok) {
+          const s = (await studentsRes.json().catch(() => [])) || [];
+          setStudents(s);
+          writeLS("schoolPortalStudents", s);
+        }
+        if (subjectsRes.ok) {
+          const s = (await subjectsRes.json().catch(() => [])) || [];
+          setSubjects(s);
+          writeLS("schoolPortalSubjects", s);
+        }
+        if (staffRes.ok) {
+          const s = (await staffRes.json().catch(() => [])) || [];
+          setStaffs(s);
+          writeLS("schoolPortalStaff", s);
+        }
       } catch (e) {
-        setError(e.message || "Failed to load data");
+        setError(e.message || "Online fetch failed (using offline cache).");
       } finally {
         setLoading(false);
       }
@@ -65,117 +100,123 @@ function AdminResultsApproval() {
     loadAll();
   }, []);
 
-  /* ================= HELPERS ================= */
   const getStudentName = (admissionNo) => {
     const s = students.find((x) => x.admissionNo === admissionNo);
-    return s ? s.fullName || s.name : "Unknown Student";
+    if (!s) return admissionNo || "Unknown Student";
+    return `${s.firstName || ""} ${s.lastName || ""}`.trim() || admissionNo;
   };
 
   const getSubjectName = (code) => {
     const s = subjects.find((x) => x.subjectCode === code);
-    return s ? s.subjectName : "Unknown Subject";
+    return s ? s.subjectName : code || "Unknown Subject";
   };
 
-  const getTeacherName = (staffId) => {
-    const t = staffs.find((x) => x.staffId === staffId);
-    return t ? `${t.firstname || ""} ${t.surname || ""}`.trim() : "Unknown Teacher";
+  const getTeacherName = (staffIdOrUsername) => {
+    const t = staffs.find((x) => x.staffId === staffIdOrUsername);
+    return t ? `${t.firstname || ""} ${t.surname || ""}`.trim() : (staffIdOrUsername || "Unknown Teacher");
   };
 
-  /* ================= APPROVE ================= */
-  const approveResult = async (result) => {
+  const approveResult = async (result0) => {
+    const result = normalizeResult(result0);
     if (!window.confirm("Approve this result?")) return;
 
-    try {
-      const approvedPayload = {
-        ...result,
-        approved: true,
-        approvedBy: user?.username || "admin",
-        approvedAt: new Date().toISOString(),
-      };
+    const approvedPayload = {
+      ...result,
+      status: "Approved",
+      approved: true,
+      approvedBy: user?.username || "admin",
+      approvedAt: new Date().toISOString(),
+    };
 
+    // ✅ offline move first (instant)
+    setPendingResults((prev) => {
+      const next = prev.filter((r) => r._id !== result0._id);
+      writeLS("schoolPortalPendingResults", next);
+      return next;
+    });
+
+    setApprovedResults((prev) => {
+      const next = [...prev, approvedPayload].map(normalizeResult);
+      writeLS("schoolPortalResults", next);
+      return next;
+    });
+
+    // try online (optional)
+    try {
       const addRes = await apiFetch("/api/schoolPortalResults", {
         method: "POST",
         body: JSON.stringify(approvedPayload),
       });
 
-      const delRes = await apiFetch(
-        `/api/schoolPortalPendingResults/${result._id}`,
-        { method: "DELETE" }
-      );
+      await apiFetch(`/api/schoolPortalPendingResults/${result0._id}`, {
+        method: "DELETE",
+      });
 
-      if (!addRes.ok || !delRes.ok) {
-        throw new Error("Approval failed");
-      }
+      if (!addRes.ok) throw new Error("Online approval failed (offline saved).");
 
-      setPendingResults((prev) => prev.filter((r) => r._id !== result._id));
-      setApprovedResults((prev) => [...prev, approvedPayload]);
       setMessage({ type: "success", text: "Result approved successfully." });
     } catch (e) {
-      setMessage({ type: "error", text: e.message || "Approval failed" });
+      setMessage({ type: "success", text: "Approved offline (online sync later)." });
     }
   };
 
-  /* ================= REJECT ================= */
   const rejectResult = async (result) => {
     if (!window.confirm("Reject this result?")) return;
 
+    // ✅ remove locally
+    setPendingResults((prev) => {
+      const next = prev.filter((r) => r._id !== result._id);
+      writeLS("schoolPortalPendingResults", next);
+      return next;
+    });
+
+    // try online (optional)
     try {
-      const res = await apiFetch(
-        `/api/schoolPortalPendingResults/${result._id}`,
-        { method: "DELETE" }
-      );
-
-      if (!res.ok) throw new Error("Rejection failed");
-
-      setPendingResults((prev) => prev.filter((r) => r._id !== result._id));
+      await apiFetch(`/api/schoolPortalPendingResults/${result._id}`, { method: "DELETE" });
       setMessage({ type: "success", text: "Result rejected." });
-    } catch (e) {
-      setMessage({ type: "error", text: e.message || "Rejection failed" });
+    } catch {
+      setMessage({ type: "success", text: "Rejected offline (online sync later)." });
     }
   };
 
-  /* ================= FILTER ================= */
   const filteredPending = useMemo(() => {
-    const t = searchTerm.toLowerCase();
-    return pendingResults.filter(
-      (r) =>
-        getStudentName(r.studentNameSelect).toLowerCase().includes(t) ||
+    const t = norm(searchTerm).toLowerCase();
+    return pendingResults.filter((r0) => {
+      const r = normalizeResult(r0);
+      return (
+        getStudentName(r.studentAdmissionNo).toLowerCase().includes(t) ||
         getSubjectName(r.subjectSelect).toLowerCase().includes(t) ||
-        getTeacherName(r.submittedBy).toLowerCase().includes(t)
-    );
+        getTeacherName(r.submittedBy).toLowerCase().includes(t) ||
+        norm(r.studentClass).toLowerCase().includes(t)
+      );
+    });
   }, [pendingResults, searchTerm]);
 
-  /* ================= UI ================= */
   if (loading) return <div className="content-section">Loading approvals…</div>;
-  if (error)
-    return (
-      <div className="content-section" style={{ color: "red" }}>
-        {error}
-      </div>
-    );
+
+  const printTerm = approvedResults[0]?.termSelect || approvedResults[0]?.term || "";
+  const printSession = approvedResults[0]?.academicYear || approvedResults[0]?.sessionSelect || approvedResults[0]?.session || "";
 
   return (
     <div className="content-section">
       <h1>Results Approval</h1>
       <p>Approve or reject submitted results.</p>
 
+      {error && (
+        <div style={{ padding: 10, background: "#fff7e6", border: "1px solid #ffe2a8", borderRadius: 8 }}>
+          {error}
+        </div>
+      )}
+
       {message && (
-        <div
-          style={{
-            padding: 10,
-            marginBottom: 15,
-            color: "#fff",
-            background:
-              message.type === "success" ? "#28a745" : "#dc3545",
-          }}
-        >
+        <div style={{ padding: 10, marginBottom: 15, color: "#fff", background: message.type === "success" ? "#28a745" : "#dc3545" }}>
           {message.text}
         </div>
       )}
 
       <input
         type="text"
-        placeholder="Search student, subject, teacher"
+        placeholder="Search student, subject, teacher, class..."
         value={searchTerm}
         onChange={(e) => setSearchTerm(e.target.value)}
         style={{ width: "100%", padding: 8, marginBottom: 15 }}
@@ -206,23 +247,24 @@ function AdminResultsApproval() {
           </thead>
           <tbody>
             {filteredPending.length ? (
-              filteredPending.map((r) => (
-                <tr key={r._id}>
-                  <td>{getStudentName(r.studentNameSelect)}</td>
-                  <td>{r.classSelect}</td>
-                  <td>{getSubjectName(r.subjectSelect)}</td>
-                  <td>{r.totalScore}</td>
-                  <td>{getTeacherName(r.submittedBy)}</td>
-                  <td>
-                    <button onClick={() => approveResult(r)}>Approve</button>{" "}
-                    <button onClick={() => rejectResult(r)}>Reject</button>
-                  </td>
-                </tr>
-              ))
+              filteredPending.map((r0) => {
+                const r = normalizeResult(r0);
+                return (
+                  <tr key={r0._id || r0.id}>
+                    <td>{getStudentName(r.studentAdmissionNo)}</td>
+                    <td>{r.studentClass || "-"}</td>
+                    <td>{getSubjectName(r.subjectSelect)}</td>
+                    <td>{r.totalScore ?? 0}</td>
+                    <td>{getTeacherName(r.submittedBy)}</td>
+                    <td>
+                      <button onClick={() => approveResult(r0)}>Approve</button>{" "}
+                      <button onClick={() => rejectResult(r0)}>Reject</button>
+                    </td>
+                  </tr>
+                );
+              })
             ) : (
-              <tr>
-                <td colSpan="6">No pending results.</td>
-              </tr>
+              <tr><td colSpan="6">No pending results.</td></tr>
             )}
           </tbody>
         </table>
@@ -232,8 +274,8 @@ function AdminResultsApproval() {
         <BatchResultSlipPrint
           students={students}
           results={approvedResults}
-          term={approvedResults[0]?.term}
-          session={approvedResults[0]?.session}
+          term={printTerm}
+          session={printSession}
         />
       )}
     </div>

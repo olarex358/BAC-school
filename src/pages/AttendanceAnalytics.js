@@ -1,144 +1,129 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { apiFetch } from "../api";
+import { useNavigate } from "react-router-dom";
+import AttendanceNav from "../components/AttendanceNav";
 
-function AttendanceAnalytics() {
-  const [records, setRecords] = useState([]);
-  const [students, setStudents] = useState([]);
+const LS_ATT = "schoolPortalAttendance";
 
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState(null);
+const readLS = (key, fallback = []) => {
+  try {
+    return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback));
+  } catch {
+    return fallback;
+  }
+};
 
-  const [classFilter, setClassFilter] = useState("");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
+const normalizeAttendance = (r) => ({
+  date: r.date || r.attendanceDate || "",
+  class: r.class || r.classSelect || r.studentClass || "",
+  admissionNo: r.admissionNo || r.studentId || r.studentNameSelect || r.studentAdmissionNo || "",
+  status: r.status || r.attendanceStatus || "Present",
+});
+
+export default function AttendanceAnalytics() {
+  const navigate = useNavigate();
+  const [user, setUser] = useState(null);
+  const [records, setRecords] = useState(() => readLS(LS_ATT, []).map(normalizeAttendance));
+  const [classSelect, setClassSelect] = useState("");
 
   useEffect(() => {
-    const load = async () => {
-      setLoading(true);
-      setErr(null);
-      try {
-        const [attRes, stuRes] = await Promise.all([
-          apiFetch("/api/schoolPortalAttendance"),
-          apiFetch("/api/schoolPortalStudents"),
-        ]);
+    const u = JSON.parse(localStorage.getItem("loggedInUser"));
+    if (!u) return navigate("/login");
+    const t = String(u.type || "").toLowerCase();
+    if (!(t.includes("staff") || t.includes("admin") || t.includes("teacher"))) {
+      return navigate("/login");
+    }
+    setUser(u);
+    setRecords(readLS(LS_ATT, []).map(normalizeAttendance));
+  }, [navigate]);
 
-        if (!attRes.ok) throw new Error("Failed to fetch attendance");
-        if (!stuRes.ok) throw new Error("Failed to fetch students");
-
-        const att = await attRes.json().catch(() => []);
-        const stu = await stuRes.json().catch(() => []);
-        setRecords(Array.isArray(att) ? att : []);
-        setStudents(Array.isArray(stu) ? stu : []);
-      } catch (e) {
-        setErr(e.message || "Load failed");
-      } finally {
-        setLoading(false);
-      }
-    };
-    load();
-  }, []);
-
-  const classes = useMemo(() => {
-    const list = students.map((s) => s.studentClass).filter(Boolean);
-    return [...new Set(list)].sort();
-  }, [students]);
+  const uniqueClasses = useMemo(() => {
+    const all = records.map((r) => r.class).filter(Boolean);
+    return [...new Set(all)].sort();
+  }, [records]);
 
   const filtered = useMemo(() => {
-    return records.filter((r) => {
-      if (classFilter && r.classSelect && r.classSelect !== classFilter) return false;
+    if (!classSelect) return records;
+    return records.filter((r) => r.class === classSelect);
+  }, [records, classSelect]);
 
-      const d = String(r.date || r.markedAt || "").slice(0, 10);
-      if (fromDate && d < fromDate) return false;
-      if (toDate && d > toDate) return false;
-
-      return true;
-    });
-  }, [records, classFilter, fromDate, toDate]);
-
-  // Quick summary
-  const summary = useMemo(() => {
-    let present = 0;
-    let absent = 0;
-
+  const stats = useMemo(() => {
+    let present = 0, absent = 0, late = 0;
     filtered.forEach((r) => {
-      const status = String(r.status || r.attendanceStatus || "").toLowerCase();
-      if (status === "present") present += 1;
-      else if (status === "absent") absent += 1;
+      if (r.status === "Present") present++;
+      else if (r.status === "Absent") absent++;
+      else if (r.status === "Late") late++;
     });
-
-    return { present, absent, total: filtered.length };
+    const total = filtered.length;
+    const pct = total ? ((present / total) * 100).toFixed(2) : "0.00";
+    return { total, present, absent, late, pct };
   }, [filtered]);
 
-  if (loading) return <div className="content-section">Loading attendance analytics…</div>;
-  if (err) return <div className="content-section" style={{ color: "red" }}>{err}</div>;
+  const byDay = useMemo(() => {
+    const map = new Map();
+    filtered.forEach((r) => {
+      const d = r.date || "Unknown";
+      if (!map.has(d)) map.set(d, { date: d, total: 0, present: 0, absent: 0, late: 0 });
+      const row = map.get(d);
+      row.total += 1;
+      if (r.status === "Present") row.present += 1;
+      else if (r.status === "Absent") row.absent += 1;
+      else if (r.status === "Late") row.late += 1;
+    });
+    return Array.from(map.values()).sort((a, b) => (a.date < b.date ? 1 : -1));
+  }, [filtered]);
+
+  if (!user) return <div className="content-section">Loading…</div>;
 
   return (
     <div className="content-section">
+      <AttendanceNav />
+
       <h1>Attendance Analytics</h1>
 
-      <div className="sub-section" style={{ display: "grid", gap: 10, maxWidth: 700 }}>
-        <select value={classFilter} onChange={(e) => setClassFilter(e.target.value)}>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        <select value={classSelect} onChange={(e) => setClassSelect(e.target.value)}>
           <option value="">All Classes</option>
-          {classes.map((c) => (
+          {uniqueClasses.map((c) => (
             <option key={c} value={c}>{c}</option>
           ))}
         </select>
 
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <div>
-            <label>From</label><br />
-            <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-          </div>
-          <div>
-            <label>To</label><br />
-            <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
-          </div>
-          <button onClick={() => { setFromDate(""); setToDate(""); setClassFilter(""); }} style={{ background: "#6c757d" }}>
-            Clear Filters
-          </button>
-        </div>
-
-        <div style={{ padding: 12, border: "1px solid #eee", borderRadius: 8 }}>
-          <b>Summary:</b> Total = {summary.total} | Present = {summary.present} | Absent = {summary.absent}
-        </div>
+        <button type="button" onClick={() => setClassSelect("")} style={{ background: "#6c757d" }}>
+          Clear
+        </button>
       </div>
 
-      <div className="sub-section">
-        <h2>Records</h2>
-        <div className="table-container">
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th style={th}>Date</th>
-                <th style={th}>Class</th>
-                <th style={th}>Student</th>
-                <th style={th}>Status</th>
-                <th style={th}>Marked By</th>
+      <div className="results-summary-card" style={{ marginBottom: 12 }}>
+        <div className="summary-item"><h3>Total</h3><p>{stats.total}</p></div>
+        <div className="summary-item"><h3>Present</h3><p>{stats.present}</p></div>
+        <div className="summary-item"><h3>Absent</h3><p>{stats.absent}</p></div>
+        <div className="summary-item"><h3>Late</h3><p>{stats.late}</p></div>
+        <div className="summary-item"><h3>Present %</h3><p>{stats.pct}%</p></div>
+      </div>
+
+      <h3>Daily Breakdown</h3>
+      <div className="table-container">
+        <table className="results-table">
+          <thead>
+            <tr>
+              <th>Date</th><th>Total</th><th>Present</th><th>Absent</th><th>Late</th>
+            </tr>
+          </thead>
+          <tbody>
+            {byDay.length ? byDay.map((d) => (
+              <tr key={d.date}>
+                <td>{d.date}</td>
+                <td>{d.total}</td>
+                <td>{d.present}</td>
+                <td>{d.absent}</td>
+                <td>{d.late}</td>
               </tr>
-            </thead>
-            <tbody>
-              {filtered.length ? (
-                filtered.map((r) => (
-                  <tr key={r._id}>
-                    <td style={td}>{String(r.date || r.markedAt || "").slice(0, 10)}</td>
-                    <td style={td}>{r.classSelect || "-"}</td>
-                    <td style={td}>{r.studentNameSelect || r.admissionNo || "-"}</td>
-                    <td style={td}>{r.status || r.attendanceStatus || "-"}</td>
-                    <td style={td}>{r.markedBy || "-"}</td>
-                  </tr>
-                ))
-              ) : (
-                <tr><td style={td} colSpan="5">No records found.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+            )) : (
+              <tr><td colSpan="5">No records found.</td></tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );
 }
-
-const th = { border: "1px solid #ddd", padding: 8, background: "#f2f2f2", textAlign: "left" };
-const td = { border: "1px solid #ddd", padding: 8 };
-
-export default AttendanceAnalytics;

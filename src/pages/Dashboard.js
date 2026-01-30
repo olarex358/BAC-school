@@ -120,11 +120,7 @@ function Dashboard() {
             <div className="card" onClick={() => navigate("/attendance-alerts")}>
               <AttendanceAlertCard />
             </div>
-
-            <div className="card" onClick={() => navigate("/attendance-alerts")}>
-              <AttendanceNotifications />
-            </div>
-
+            
             <div className="card" onClick={() => navigate("/results-management")}>
               <img src={resultsInputIcon} alt="" />
               Input Results ({results.length})

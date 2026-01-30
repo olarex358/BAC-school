@@ -1,327 +1,172 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { apiFetch } from "../api";
-import { useAuth } from "../context/AuthContext";
+import { useNavigate } from "react-router-dom";
+import AttendanceNav from "../components/AttendanceNav";
 
-function AttendanceAlerts() {
-  const { user } = useAuth();
+const LS_ATT = "schoolPortalAttendance";
+const LS_STU = "schoolPortalStudents";
 
-  const [attendance, setAttendance] = useState([]);
-  const [students, setStudents] = useState([]);
+const readLS = (key, fallback = []) => {
+  try {
+    return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback));
+  } catch {
+    return fallback;
+  }
+};
 
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState(null);
+const normalizeAttendance = (r) => ({
+  date: r.date || r.attendanceDate || "",
+  class: r.class || r.classSelect || r.studentClass || "",
+  admissionNo: r.admissionNo || r.studentId || r.studentNameSelect || r.studentAdmissionNo || "",
+  status: r.status || r.attendanceStatus || "Present",
+});
 
-  // filters
-  const [classFilter, setClassFilter] = useState("");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
+const downloadTextFile = (filename, text) => {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+};
 
-  // thresholds
-  const [minAttendancePercent, setMinAttendancePercent] = useState(75);
-  const [maxAbsences, setMaxAbsences] = useState(5);
-  const [consecutiveAbsences, setConsecutiveAbsences] = useState(3);
+export default function AttendanceAlerts() {
+  const navigate = useNavigate();
+  const [user, setUser] = useState(null);
+
+  const [students] = useState(() => readLS(LS_STU, []));
+  const [records, setRecords] = useState(() => readLS(LS_ATT, []).map(normalizeAttendance));
+
+  const [threshold, setThreshold] = useState(75); // percent
+  const [minRecords, setMinRecords] = useState(5);
 
   useEffect(() => {
-    const load = async () => {
-      setLoading(true);
-      setErr(null);
-
-      try {
-        const [attRes, stuRes] = await Promise.all([
-          apiFetch("/api/schoolPortalAttendance"),
-          apiFetch("/api/schoolPortalStudents"),
-        ]);
-
-        if (!attRes.ok) {
-          const e = await attRes.json().catch(() => ({}));
-          throw new Error(e.message || `Failed to load attendance (${attRes.status})`);
-        }
-
-        if (!stuRes.ok) {
-          const e = await stuRes.json().catch(() => ({}));
-          throw new Error(e.message || `Failed to load students (${stuRes.status})`);
-        }
-
-        const att = await attRes.json().catch(() => []);
-        const stu = await stuRes.json().catch(() => []);
-
-        setAttendance(Array.isArray(att) ? att : []);
-        setStudents(Array.isArray(stu) ? stu : []);
-      } catch (e) {
-        setErr(e.message || "Load failed");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    load();
-  }, []);
-
-  const classes = useMemo(() => {
-    const list = students.map((s) => s.studentClass).filter(Boolean);
-    return [...new Set(list)].sort();
-  }, [students]);
+    const u = JSON.parse(localStorage.getItem("loggedInUser"));
+    if (!u) return navigate("/login");
+    const t = String(u.type || "").toLowerCase();
+    if (!(t.includes("staff") || t.includes("admin") || t.includes("teacher"))) {
+      return navigate("/login");
+    }
+    setUser(u);
+    setRecords(readLS(LS_ATT, []).map(normalizeAttendance));
+  }, [navigate]);
 
   const studentMap = useMemo(() => {
-    const m = new Map();
-    students.forEach((s) => m.set(s.admissionNo, s));
-    return m;
+    const map = new Map();
+    students.forEach((s) => map.set(String(s.admissionNo), s));
+    return map;
   }, [students]);
 
-  const filteredAttendance = useMemo(() => {
-    return attendance.filter((r) => {
-      // class filter (record might store classSelect)
-      if (classFilter && r.classSelect && r.classSelect !== classFilter) return false;
-
-      const d = String(r.date || r.markedAt || "").slice(0, 10);
-      if (fromDate && d < fromDate) return false;
-      if (toDate && d > toDate) return false;
-
-      return true;
-    });
-  }, [attendance, classFilter, fromDate, toDate]);
-
-  // group by student admissionNo
-  const grouped = useMemo(() => {
+  const statsByStudent = useMemo(() => {
     const map = new Map();
 
-    filteredAttendance.forEach((r) => {
-      const adm = r.studentNameSelect || r.admissionNo;
-      if (!adm) return;
-
-      if (!map.has(adm)) map.set(adm, []);
-      map.get(adm).push(r);
+    records.forEach((r) => {
+      if (!r.admissionNo) return;
+      if (!map.has(r.admissionNo)) {
+        map.set(r.admissionNo, { admissionNo: r.admissionNo, present: 0, total: 0, class: r.class || "" });
+      }
+      const row = map.get(r.admissionNo);
+      row.total += 1;
+      if (r.status === "Present") row.present += 1;
+      if (!row.class && r.class) row.class = r.class;
     });
 
-    // sort records by date per student
-    for (const [adm, rows] of map.entries()) {
-      rows.sort((a, b) => {
-        const da = String(a.date || a.markedAt || "").slice(0, 10);
-        const db = String(b.date || b.markedAt || "").slice(0, 10);
-        return da.localeCompare(db);
-      });
-      map.set(adm, rows);
-    }
-
-    return map;
-  }, [filteredAttendance]);
-
-  const computeConsecutiveAbsences = (rows) => {
-    let maxRun = 0;
-    let run = 0;
-
-    for (const r of rows) {
-      const status = String(r.status || r.attendanceStatus || "").toLowerCase();
-      if (status === "absent") {
-        run += 1;
-        if (run > maxRun) maxRun = run;
-      } else {
-        run = 0;
-      }
-    }
-    return maxRun;
-  };
+    return Array.from(map.values()).map((x) => ({
+      ...x,
+      pct: x.total ? (x.present / x.total) * 100 : 0,
+    }));
+  }, [records]);
 
   const alerts = useMemo(() => {
-    const list = [];
+    const th = Number(threshold) || 0;
+    const min = Number(minRecords) || 0;
+    return statsByStudent
+      .filter((s) => s.total >= min && s.pct < th)
+      .sort((a, b) => a.pct - b.pct);
+  }, [statsByStudent, threshold, minRecords]);
 
-    for (const [adm, rows] of grouped.entries()) {
-      let present = 0;
-      let absent = 0;
-
-      rows.forEach((r) => {
-        const status = String(r.status || r.attendanceStatus || "").toLowerCase();
-        if (status === "present") present += 1;
-        else if (status === "absent") absent += 1;
-      });
-
-      const total = present + absent;
-      const percent = total ? Math.round((present / total) * 100) : 0;
-      const consAbs = computeConsecutiveAbsences(rows);
-
-      const s = studentMap.get(adm);
-      const studentName =
-        s?.fullName ||
-        `${s?.firstName || ""} ${s?.lastName || ""}`.trim() ||
-        adm;
-
-      const studentClass = s?.studentClass || rows[0]?.classSelect || "-";
-
-      const reasons = [];
-      if (percent < Number(minAttendancePercent)) reasons.push(`Low attendance (${percent}%)`);
-      if (absent >= Number(maxAbsences)) reasons.push(`Many absences (${absent})`);
-      if (consAbs >= Number(consecutiveAbsences)) reasons.push(`Consecutive absences (${consAbs})`);
-
-      if (reasons.length) {
-        list.push({
-          admissionNo: adm,
-          studentName,
-          studentClass,
-          present,
-          absent,
-          total,
-          attendancePercent: percent,
-          consecutiveAbsences: consAbs,
-          reasons: reasons.join(" | "),
-        });
-      }
-    }
-
-    // Sort: worst first
-    list.sort((a, b) => a.attendancePercent - b.attendancePercent);
-    return list;
-  }, [grouped, studentMap, minAttendancePercent, maxAbsences, consecutiveAbsences]);
-
-  const exportCSV = () => {
-    const header = [
-      "admissionNo",
-      "studentName",
-      "class",
-      "present",
-      "absent",
-      "total",
-      "attendancePercent",
-      "consecutiveAbsences",
-      "reasons",
-    ];
-
-    const rows = alerts.map((a) => [
-      a.admissionNo,
-      a.studentName,
-      a.studentClass,
-      a.present,
-      a.absent,
-      a.total,
-      a.attendancePercent,
-      a.consecutiveAbsences,
-      a.reasons,
-    ]);
-
-    const csv = [header, ...rows]
-      .map((row) => row.map((x) => `"${String(x).replace(/"/g, '""')}"`).join(","))
-      .join("\n");
-
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `attendance_alerts${classFilter ? "_" + classFilter : ""}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const nameOf = (admissionNo) => {
+    const s = studentMap.get(String(admissionNo));
+    if (!s) return "";
+    return `${s.firstName || ""} ${s.lastName || ""}`.trim();
   };
 
-  if (loading) return <div className="content-section">Loading attendance alerts…</div>;
-  if (err) return <div className="content-section" style={{ color: "red" }}>{err}</div>;
+  const exportCSV = () => {
+    const header = "admissionNo,name,class,present,total,percentage";
+    const rows = alerts.map((a) => {
+      const nm = nameOf(a.admissionNo).replace(/,/g, " ");
+      return `${a.admissionNo},${nm},${(a.class || "").replace(/,/g, " ")},${a.present},${a.total},${a.pct.toFixed(2)}`;
+    });
+    downloadTextFile(`attendance_alerts_${Date.now()}.csv`, [header, ...rows].join("\n"));
+  };
+
+  if (!user) return <div className="content-section">Loading…</div>;
 
   return (
     <div className="content-section">
+      <AttendanceNav />
+
       <h1>Attendance Alerts</h1>
-      <p style={{ marginTop: -8, color: "#555" }}>
-        Logged in as: <b>{user?.username || user?.role || "Admin"}</b>
-      </p>
 
-      <div className="sub-section" style={{ display: "grid", gap: 10, maxWidth: 900 }}>
-        <h2>Filters</h2>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        <label>
+          Threshold %
+          <input
+            type="number"
+            value={threshold}
+            onChange={(e) => setThreshold(e.target.value)}
+            style={{ width: 90, marginLeft: 6 }}
+          />
+        </label>
 
-        <select value={classFilter} onChange={(e) => setClassFilter(e.target.value)}>
-          <option value="">All Classes</option>
-          {classes.map((c) => (
-            <option key={c} value={c}>{c}</option>
-          ))}
-        </select>
+        <label>
+          Min Records
+          <input
+            type="number"
+            value={minRecords}
+            onChange={(e) => setMinRecords(e.target.value)}
+            style={{ width: 90, marginLeft: 6 }}
+          />
+        </label>
 
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <div>
-            <label style={{ fontSize: 12, color: "#666" }}>From</label><br />
-            <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: "#666" }}>To</label><br />
-            <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
-          </div>
-          <button
-            onClick={() => { setClassFilter(""); setFromDate(""); setToDate(""); }}
-            style={{ background: "#6c757d" }}
-          >
-            Clear Filters
-          </button>
-        </div>
-
-        <h2>Alert Thresholds</h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
-          <div>
-            <label style={{ fontSize: 12, color: "#666" }}>Min Attendance %</label>
-            <input
-              type="number"
-              value={minAttendancePercent}
-              onChange={(e) => setMinAttendancePercent(e.target.value)}
-            />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: "#666" }}>Max Absences</label>
-            <input
-              type="number"
-              value={maxAbsences}
-              onChange={(e) => setMaxAbsences(e.target.value)}
-            />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: "#666" }}>Consecutive Absences</label>
-            <input
-              type="number"
-              value={consecutiveAbsences}
-              onChange={(e) => setConsecutiveAbsences(e.target.value)}
-            />
-          </div>
-        </div>
-
-        <button onClick={exportCSV}>Export Alerts CSV</button>
+        <button type="button" onClick={exportCSV}>Export CSV</button>
       </div>
 
-      <div className="sub-section">
-        <h2>Alerts ({alerts.length})</h2>
+      <p>
+        Students below <b>{threshold}%</b> attendance (min records: <b>{minRecords}</b>) →{" "}
+        <b>{alerts.length}</b>
+      </p>
 
-        <div className="table-container">
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th style={th}>Student</th>
-                <th style={th}>Admission No</th>
-                <th style={th}>Class</th>
-                <th style={th}>Present</th>
-                <th style={th}>Absent</th>
-                <th style={th}>%</th>
-                <th style={th}>Consecutive Abs</th>
-                <th style={th}>Reasons</th>
+      <div className="table-container">
+        <table className="results-table">
+          <thead>
+            <tr>
+              <th>Admission No</th>
+              <th>Name</th>
+              <th>Class</th>
+              <th>Present</th>
+              <th>Total</th>
+              <th>%</th>
+            </tr>
+          </thead>
+          <tbody>
+            {alerts.length ? alerts.map((a) => (
+              <tr key={a.admissionNo}>
+                <td>{a.admissionNo}</td>
+                <td>{nameOf(a.admissionNo) || "-"}</td>
+                <td>{a.class || "-"}</td>
+                <td>{a.present}</td>
+                <td>{a.total}</td>
+                <td><b>{a.pct.toFixed(2)}%</b></td>
               </tr>
-            </thead>
-            <tbody>
-              {alerts.length ? (
-                alerts.map((a) => (
-                  <tr key={a.admissionNo}>
-                    <td style={td}><b>{a.studentName}</b></td>
-                    <td style={td}>{a.admissionNo}</td>
-                    <td style={td}>{a.studentClass}</td>
-                    <td style={td}>{a.present}</td>
-                    <td style={td}>{a.absent}</td>
-                    <td style={td}><b>{a.attendancePercent}%</b></td>
-                    <td style={td}>{a.consecutiveAbsences}</td>
-                    <td style={td}>{a.reasons}</td>
-                  </tr>
-                ))
-              ) : (
-                <tr><td style={td} colSpan="8">No alerts found for current thresholds.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+            )) : (
+              <tr><td colSpan="6">No alerts found.</td></tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );
 }
-
-const th = { border: "1px solid #ddd", padding: 8, background: "#f2f2f2", textAlign: "left" };
-const td = { border: "1px solid #ddd", padding: 8 };
-
-export default AttendanceAlerts;

@@ -12,18 +12,56 @@ const initialItem = {
 };
 
 const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+const norm = (v) => String(v ?? "").trim();
 
-function AdminTimetableManagement() {
+const buildPeriodFromTimes = (startTime, endTime) => {
+  const s = norm(startTime);
+  const e = norm(endTime);
+  if (s && e) return `${s}-${e}`;
+  return s || "";
+};
+
+const normalizeTimetable = (x) => {
+  // Admin format
+  if (x?.className || x?.period || x?.subject) {
+    return {
+      ...x,
+      className: x.className || "",
+      day: x.day || "Monday",
+      period: x.period || "",
+      subject: x.subject || "",
+      teacher: x.teacher || "",
+      room: x.room || "",
+    };
+  }
+
+  // Old format (staff/student)
+  return {
+    ...x,
+    className: x.classSelect || x.class || "",
+    day: x.day || "Monday",
+    period: buildPeriodFromTimes(x.startTime, x.endTime) || x.period || "",
+    subject: x.subject || x.subjectSelect || "",
+    teacher: x.teacher || x.teacherSelect || "",
+    room: x.room || x.location || "",
+  };
+};
+
+const isValidEntry = (x) => {
+  const n = normalizeTimetable(x);
+  return !!(norm(n.className) && norm(n.period) && norm(n.subject));
+};
+
+export default function AdminTimetableManagement() {
   const { user } = useAuth();
 
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState(null);
-
   const [form, setForm] = useState(initialItem);
-  const [submitting, setSubmitting] = useState(false);
+  const [items, setItems] = useState([]);
   const [editingId, setEditingId] = useState(null);
 
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
   const [search, setSearch] = useState("");
 
   useEffect(() => {
@@ -39,23 +77,14 @@ function AdminTimetableManagement() {
         const data = await res.json().catch(() => []);
         setItems(Array.isArray(data) ? data : []);
       } catch (e) {
-        setErr(e.message || "Load failed");
+        setErr(e.message || "Failed to load timetables");
       } finally {
         setLoading(false);
       }
     };
+
     load();
   }, []);
-
-  const filtered = useMemo(() => {
-    const t = search.trim().toLowerCase();
-    if (!t) return items;
-    return items.filter((x) =>
-      [x.className, x.day, x.subject, x.teacher, x.room, x.period]
-        .map((v) => String(v || "").toLowerCase())
-        .some((v) => v.includes(t))
-    );
-  }, [items, search]);
 
   const onChange = (e) => {
     const { id, value } = e.target;
@@ -68,50 +97,77 @@ function AdminTimetableManagement() {
   };
 
   const startEdit = (x) => {
-    setEditingId(x._id);
+    const n = normalizeTimetable(x);
+    setEditingId(x._id || x.id || null);
     setForm({
-      className: x.className || "",
-      day: x.day || "Monday",
-      period: x.period || "",
-      subject: x.subject || "",
-      teacher: x.teacher || "",
-      room: x.room || "",
+      className: n.className || "",
+      day: n.day || "Monday",
+      period: n.period || "",
+      subject: n.subject || "",
+      teacher: n.teacher || "",
+      room: n.room || "",
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const remove = async (x) => {
+    const id = x._id || x.id;
+    if (!id) return;
     if (!window.confirm("Delete this timetable entry?")) return;
-    setSubmitting(true);
+
     try {
-      const res = await apiFetch(`/api/schoolPortalTimetables/${x._id}`, { method: "DELETE" });
-      if (!res.ok) {
-        const e = await res.json().catch(() => ({}));
-        throw new Error(e.message || "Delete failed");
-      }
-      setItems((prev) => prev.filter((i) => i._id !== x._id));
+      const res = await apiFetch(`/api/schoolPortalTimetables/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Delete failed");
+      setItems((prev) => prev.filter((i) => (i._id || i.id) !== id));
     } catch (e) {
       alert(e.message || "Delete failed");
-    } finally {
-      setSubmitting(false);
     }
+  };
+
+  const cleanBrokenRows = async () => {
+    const broken = items.filter((x) => !isValidEntry(x) && (x._id || x.id));
+    if (!broken.length) return alert("No broken rows found ✅");
+
+    if (!window.confirm(`Delete ${broken.length} broken timetable rows?`)) return;
+
+    for (const b of broken) {
+      const id = b._id || b.id;
+      await apiFetch(`/api/schoolPortalTimetables/${id}`, { method: "DELETE" }).catch(() => {});
+    }
+
+    setItems((prev) => prev.filter((x) => isValidEntry(x)));
+    alert("Broken rows cleaned ✅");
   };
 
   const submit = async (e) => {
     e.preventDefault();
     if (submitting) return;
 
-    if (!form.className.trim()) return alert("Class is required");
-    if (!form.period.trim()) return alert("Period is required");
-    if (!form.subject.trim()) return alert("Subject is required");
+    const className = norm(form.className);
+    const period = norm(form.period);
+    const subject = norm(form.subject);
+    const teacher = norm(form.teacher);
+    const room = norm(form.room);
+
+    if (!className) return alert("Class is required");
+    if (!period) return alert("Period is required");
+    if (!subject) return alert("Subject is required");
 
     const payload = {
-      ...form,
-      className: form.className.trim(),
-      period: form.period.trim(),
-      subject: form.subject.trim(),
-      teacher: form.teacher.trim(),
-      room: form.room.trim(),
+      // admin format
+      className,
+      day: form.day,
+      period,
+      subject,
+      teacher,
+      room,
+
+      // legacy format too
+      classSelect: className,
+      subjectSelect: subject,
+      teacherSelect: teacher,
+      location: room,
+
       updatedBy: user?.username || "admin",
       updatedAt: new Date().toISOString(),
     };
@@ -123,32 +179,50 @@ function AdminTimetableManagement() {
           method: "PUT",
           body: JSON.stringify(payload),
         });
-        if (!res.ok) {
-          const e2 = await res.json().catch(() => ({}));
-          throw new Error(e2.message || "Update failed");
-        }
+        if (!res.ok) throw new Error("Update failed");
+
         const updated = await res.json().catch(() => null);
-        setItems((prev) => prev.map((i) => (i._id === updated._id ? updated : i)));
+        const finalObj = updated || { ...payload, _id: editingId };
+
+        setItems((prev) =>
+          prev.map((i) => ((i._id || i.id) === editingId ? finalObj : i))
+        );
         reset();
       } else {
         const res = await apiFetch("/api/schoolPortalTimetables", {
           method: "POST",
           body: JSON.stringify(payload),
         });
-        if (!res.ok) {
-          const e2 = await res.json().catch(() => ({}));
-          throw new Error(e2.message || "Create failed");
-        }
+        if (!res.ok) throw new Error("Create failed");
+
         const created = await res.json().catch(() => null);
-        if (created?._id) setItems((prev) => [created, ...prev]);
+        setItems((prev) => [created || payload, ...prev]);
         reset();
       }
-    } catch (e3) {
-      alert(e3.message || "Save failed");
+    } catch (e2) {
+      alert(e2.message || "Save failed");
     } finally {
       setSubmitting(false);
     }
   };
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const normalized = items.map(normalizeTimetable);
+
+    if (!q) return normalized;
+
+    return normalized.filter((n) => {
+      return (
+        norm(n.className).toLowerCase().includes(q) ||
+        norm(n.day).toLowerCase().includes(q) ||
+        norm(n.period).toLowerCase().includes(q) ||
+        norm(n.subject).toLowerCase().includes(q) ||
+        norm(n.teacher).toLowerCase().includes(q) ||
+        norm(n.room).toLowerCase().includes(q)
+      );
+    });
+  }, [items, search]);
 
   if (loading) return <div className="content-section">Loading timetable…</div>;
   if (err) return <div className="content-section" style={{ color: "red" }}>{err}</div>;
@@ -174,8 +248,9 @@ function AdminTimetableManagement() {
             <button type="submit" disabled={submitting}>
               {submitting ? "Saving..." : editingId ? "Update" : "Add"}
             </button>
-            <button type="button" onClick={reset} style={{ background: "#6c757d" }}>
-              Clear
+            <button type="button" onClick={reset} style={{ background: "#6c757d" }}>Clear</button>
+            <button type="button" onClick={cleanBrokenRows} style={{ background: "#dc2626" }}>
+              Clean Broken Rows
             </button>
           </div>
         </form>
@@ -188,10 +263,10 @@ function AdminTimetableManagement() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search class/day/subject/teacher..."
-          style={{ width: "100%", padding: 8, marginBottom: 10 }}
+          style={{ width: "100%", padding: 10, marginBottom: 12 }}
         />
 
-        <div className="table-container">
+        <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -201,27 +276,44 @@ function AdminTimetableManagement() {
                 <th style={th}>Subject</th>
                 <th style={th}>Teacher</th>
                 <th style={th}>Room</th>
+                <th style={th}>Status</th>
                 <th style={th}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length ? (
-                filtered.map((x) => (
-                  <tr key={x._id}>
-                    <td style={td}>{x.className}</td>
-                    <td style={td}>{x.day}</td>
-                    <td style={td}>{x.period}</td>
-                    <td style={td}><b>{x.subject}</b></td>
-                    <td style={td}>{x.teacher || "-"}</td>
-                    <td style={td}>{x.room || "-"}</td>
-                    <td style={td}>
-                      <button onClick={() => startEdit(x)}>Edit</button>{" "}
-                      <button onClick={() => remove(x)} style={{ background: "#dc2626" }}>Delete</button>
-                    </td>
-                  </tr>
-                ))
+                filtered.map((n) => {
+                  const valid = isValidEntry(n);
+                  return (
+                    <tr key={n._id || n.id || `${n.className}-${n.day}-${n.period}-${n.subject}`}>
+                      <td style={td}>{n.className || "-"}</td>
+                      <td style={td}>{n.day || "-"}</td>
+                      <td style={td}>{n.period || "-"}</td>
+                      <td style={td}><b>{n.subject || "-"}</b></td>
+                      <td style={td}>{n.teacher || "-"}</td>
+                      <td style={td}>{n.room || "-"}</td>
+                      <td style={td}>
+                        {valid ? (
+                          <span style={{ padding: "3px 8px", borderRadius: 999, background: "#16a34a", color: "#fff" }}>
+                            OK
+                          </span>
+                        ) : (
+                          <span style={{ padding: "3px 8px", borderRadius: 999, background: "#dc2626", color: "#fff" }}>
+                            Incomplete
+                          </span>
+                        )}
+                      </td>
+                      <td style={td}>
+                        <button onClick={() => startEdit(n)}>Edit</button>{" "}
+                        <button onClick={() => remove(n)} style={{ background: "#dc2626" }}>
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
               ) : (
-                <tr><td style={td} colSpan="7">No timetable entries.</td></tr>
+                <tr><td style={td} colSpan="8">No timetable entries.</td></tr>
               )}
             </tbody>
           </table>
@@ -233,5 +325,3 @@ function AdminTimetableManagement() {
 
 const th = { border: "1px solid #ddd", padding: 8, background: "#f2f2f2", textAlign: "left" };
 const td = { border: "1px solid #ddd", padding: 8 };
-
-export default AdminTimetableManagement;
