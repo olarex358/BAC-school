@@ -1,22 +1,23 @@
-// src/pages/StudentMails.js
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import useLocalStorage from '../hooks/useLocalStorage';
-import ConfirmModal from '../components/ConfirmModal';
-
-
-// Import the mails icon
-import mailsIcon from '../icon/mails.png';
+import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import useLocalStorage from "../hooks/useLocalStorage";
+import ConfirmModal from "../components/ConfirmModal";
+import mailsIcon from "../icon/mails.png";
 
 function StudentMails() {
   const [loggedInStudent, setLoggedInStudent] = useState(null);
   const navigate = useNavigate();
-  
-  const [adminMessages, , loadingMessages] = useLocalStorage('schoolPortalAdminMessages', [], 'http://localhost:5000/api/schoolPortalAdminMessages');
+
+  // ✅ remove localhost
+  const [adminMessages, , loadingMessages] = useLocalStorage(
+    "schoolPortalAdminMessages",
+    [],
+    "/api/schoolPortalAdminMessages"
+  );
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalMessage, setModalMessage] = useState('');
+  const [modalMessage, setModalMessage] = useState("");
   const [isModalAlert, setIsModalAlert] = useState(false);
 
   const showAlert = (msg) => {
@@ -26,27 +27,32 @@ function StudentMails() {
   };
 
   useEffect(() => {
-    const user = JSON.parse(localStorage.getItem('loggedInUser'));
-    if (user && user.type === 'student') {
+    const user = JSON.parse(localStorage.getItem("loggedInUser"));
+    if (user && user.type === "student") {
       setLoggedInStudent(user);
     } else {
-      navigate('/login');
+      navigate("/login");
     }
   }, [navigate]);
 
   const handleLogout = () => {
-    localStorage.removeItem('loggedInUser');
-    navigate('/home');
+    localStorage.removeItem("loggedInUser");
+    localStorage.removeItem("authToken");
+    navigate("/home");
   };
 
   if (!loggedInStudent || loadingMessages) {
     return <div className="content-section">Loading mails...</div>;
   }
 
-  const studentRelevantMessages = adminMessages.filter(msg =>
-    msg.recipientType === 'allStudents' ||
-    (msg.recipientType === 'individualStudent' && msg.recipientId === loggedInStudent.admissionNo)
-  ).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  const studentRelevantMessages = (adminMessages || [])
+    .filter(
+      (msg) =>
+        msg.recipientType === "allStudents" ||
+        (msg.recipientType === "individualStudent" &&
+          msg.recipientId === loggedInStudent.admissionNo)
+    )
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
   return (
     <div className="content-section">
@@ -58,23 +64,25 @@ function StudentMails() {
         isAlert={isModalAlert}
       />
       <h1>My Mails</h1>
-      <p>Welcome, {loggedInStudent.firstName} {loggedInStudent.lastName}! Here are your recent messages and announcements:</p>
+      <p>
+        Welcome, {loggedInStudent.firstName} {loggedInStudent.lastName}! Here are your
+        recent messages and announcements:
+      </p>
 
       {studentRelevantMessages.length > 0 ? (
         <div className="mails-list">
-          {studentRelevantMessages.map(mail => (
-            <div key={mail._id} className="mail-card">
+          {studentRelevantMessages.map((mail) => (
+            <div key={mail._id || mail.id} className="mail-card">
               <div className="mail-icon-container">
                 <img src={mailsIcon} alt="Mail Icon" className="mail-icon" />
               </div>
               <div className="mail-content">
                 <h3 className="mail-subject">{mail.subject}</h3>
                 <p className="mail-meta">
-                  From: {mail.sender} | Date: {new Date(mail.timestamp).toLocaleDateString()}
+                  From: {mail.sender} | Date:{" "}
+                  {mail.timestamp ? new Date(mail.timestamp).toLocaleDateString() : "-"}
                 </p>
-                <p className="mail-body">
-                  {mail.body}
-                </p>
+                <p className="mail-body">{mail.body}</p>
               </div>
             </div>
           ))}
@@ -87,7 +95,9 @@ function StudentMails() {
         For any mail-related issues or to compose a new message, please visit the IT support desk.
       </p>
 
-      <button onClick={handleLogout} className="logout-button">Logout</button>
+      <button onClick={handleLogout} className="logout-button">
+        Logout
+      </button>
     </div>
   );
 }

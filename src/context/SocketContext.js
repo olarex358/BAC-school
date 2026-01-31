@@ -1,6 +1,5 @@
-// src/context/SocketContext.js
-import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
-import io from "socket.io-client";
+import React, { createContext, useContext, useEffect, useState } from "react";
+import { io } from "socket.io-client";
 
 const SocketContext = createContext(null);
 
@@ -9,42 +8,23 @@ export const useSocket = () => useContext(SocketContext);
 export const SocketProvider = ({ children }) => {
   const [socket, setSocket] = useState(null);
 
-  // ✅ Use same base as apiFetch
-  const socketUrl = useMemo(() => {
-    // If you deploy backend on Render, set REACT_APP_API_URL in frontend env
-    // Example: https://school-portal-backend-i29s.onrender.com
-    return process.env.REACT_APP_API_URL || "";
-  }, []);
-
   useEffect(() => {
-    // ✅ v0.1: sockets are optional. If no URL, skip silently.
-    if (!socketUrl) return;
+    const SOCKET_URL =
+      process.env.NODE_ENV === "development"
+        ? "http://localhost:5000"
+        : undefined; // same origin on Render
 
-    // ✅ avoid connecting while offline
-    if (!navigator.onLine) return;
-
-    const token =
-      localStorage.getItem("authToken") ||
-      localStorage.getItem("token") ||
-      "";
-
-    const s = io(socketUrl, {
+    const newSocket = io(SOCKET_URL, {
       transports: ["websocket"],
-      auth: token ? { token } : undefined, // backend can read socket.handshake.auth.token
-      reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
+      withCredentials: true,
     });
 
-    setSocket(s);
+    setSocket(newSocket);
 
     return () => {
-      try {
-        s.disconnect();
-      } catch {}
-      setSocket(null);
+      newSocket.disconnect();
     };
-  }, [socketUrl]);
+  }, []);
 
   return (
     <SocketContext.Provider value={socket}>
@@ -52,3 +32,5 @@ export const SocketProvider = ({ children }) => {
     </SocketContext.Provider>
   );
 };
+
+export default SocketContext;

@@ -16,6 +16,8 @@ import timetableIcon from "../icon/calender.png";
 import libraryIcon from "../icon/library.png";
 import certificationIcon from "../icon/certification.png";
 
+
+
 function StudentDashboard() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
@@ -50,6 +52,8 @@ function StudentDashboard() {
             <li><Link to="/student-timetable">My Timetable</Link></li>
             <li><Link to="/student-certification-registration">Register for Certification</Link></li>
             <li><Link to="/student-digital-library">Digital Library</Link></li>
+            <li><Link to="/student-news">College News</Link></li>
+            <li><Link to="/student-certification">My Certification</Link></li>
           </ul>
 
           <button onClick={handleLogout}>Logout</button>

@@ -24,6 +24,8 @@ import certificationIcon from "../icon/certification.png";
 import AttendanceAlertCard from "../components/AttendanceAlertCard";
 import AttendanceNotifications from "../components/AttendanceNotifications";
 
+
+
 function Dashboard() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
@@ -73,11 +75,13 @@ function Dashboard() {
             <li><Link to="/admin-calendar-management">Calendar</Link></li>
             <li><Link to="/admin-syllabus-management">Syllabus</Link></li>
             <li><Link to="/admin-timetable-management">Timetable</Link></li>
+            <li><Link to="/promotion-management">Promotions</Link></li>
             <li>
               <Link to="/admin-digital-library">
                 Digital Library ({digitalResources.length})
               </Link>
             </li>
+            
             <li>
               <Link to="/admin-certification-management">
                 Certification ({certifications.length})
