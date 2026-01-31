@@ -94,6 +94,8 @@ import Header from "./components/Header";
 import Footer from "./components/Footer";
 import ProtectedRoute from "./components/ProtectedRoute";
 import ConnectionStatus from "./components/ConnectionStatus";
+import "./styles/responsive.css";
+
 
 function App() {
   const navigate = useNavigate();
