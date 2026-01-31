@@ -22,19 +22,21 @@ const parsePeriodToTimes = (period) => {
 const resolveSubjectCode = (subjectValue, subjects) => {
   const val = norm(subjectValue);
   if (!val) return "";
-  const direct = subjects.find((s) => norm(s.subjectCode) === val);
+  const direct = (subjects || []).find((s) => norm(s.subjectCode) === val);
   if (direct) return direct.subjectCode;
-  const byName = subjects.find((s) => normLower(s.subjectName) === normLower(val));
+  const byName = (subjects || []).find(
+    (s) => normLower(s.subjectName) === normLower(val)
+  );
   return byName ? byName.subjectCode : val;
 };
 
 const resolveTeacherId = (teacherValue, staffs) => {
   const val = norm(teacherValue);
   if (!val) return "";
-  const direct = staffs.find((s) => norm(s.staffId) === val);
+  const direct = (staffs || []).find((s) => norm(s.staffId) === val);
   if (direct) return direct.staffId;
 
-  const byName = staffs.find((s) => {
+  const byName = (staffs || []).find((s) => {
     const full = `${norm(s.firstname)} ${norm(s.surname)}`.trim();
     return normLower(full) === normLower(val);
   });
@@ -43,15 +45,20 @@ const resolveTeacherId = (teacherValue, staffs) => {
 
 const normalizeEntry = (entry, subjects, staffs) => {
   const hasOldShape =
-    entry?.classSelect || entry?.subjectSelect || entry?.startTime || entry?.endTime;
+    entry?.classSelect ||
+    entry?.subjectSelect ||
+    entry?.startTime ||
+    entry?.endTime;
 
   if (hasOldShape) {
     return {
       ...entry,
       day: entry.day || "Monday",
       classSelect: entry.classSelect || entry.className || "",
-      subjectSelect: entry.subjectSelect || resolveSubjectCode(entry.subject, subjects) || "",
-      teacherSelect: entry.teacherSelect || resolveTeacherId(entry.teacher, staffs) || "",
+      subjectSelect:
+        entry.subjectSelect || resolveSubjectCode(entry.subject, subjects) || "",
+      teacherSelect:
+        entry.teacherSelect || resolveTeacherId(entry.teacher, staffs) || "",
       startTime: entry.startTime || "",
       endTime: entry.endTime || "",
       location: entry.location || entry.room || "",
@@ -62,7 +69,10 @@ const normalizeEntry = (entry, subjects, staffs) => {
   const { startTime, endTime } = parsePeriodToTimes(entry?.period);
 
   return {
-    _id: entry?._id || entry?.id || `${entry?.className}-${entry?.day}-${entry?.period}-${entry?.subject}`,
+    _id:
+      entry?._id ||
+      entry?.id ||
+      `${entry?.className}-${entry?.day}-${entry?.period}-${entry?.subject}`,
     day: entry?.day || "Monday",
     classSelect: entry?.className || "",
     subjectSelect: resolveSubjectCode(entry?.subject, subjects),
@@ -78,20 +88,21 @@ function StudentTimetable() {
   const navigate = useNavigate();
   const [loggedInStudent, setLoggedInStudent] = useState(null);
 
+  // ✅ remove localhost and use relative /api paths
   const [allTimetableEntries, , loadingTimetable] = useLocalStorage(
     "schoolPortalTimetables",
     [],
-    "http://localhost:5000/api/schoolPortalTimetables"
+    "/api/schoolPortalTimetables"
   );
   const [subjects] = useLocalStorage(
     "schoolPortalSubjects",
     [],
-    "http://localhost:5000/api/schoolPortalSubjects"
+    "/api/schoolPortalSubjects"
   );
   const [staffs] = useLocalStorage(
     "schoolPortalStaff",
     [],
-    "http://localhost:5000/api/schoolPortalStaff"
+    "/api/schoolPortalStaff"
   );
 
   const [studentSpecificTimetable, setStudentSpecificTimetable] = useState([]);
@@ -126,7 +137,8 @@ function StudentTimetable() {
       const filteredForStudent = normalizedEntries
         .filter((entry) => entry.classSelect === loggedInStudent.studentClass)
         .sort((a, b) => {
-          const dayComparison = daysOfWeek.indexOf(a.day) - daysOfWeek.indexOf(b.day);
+          const dayComparison =
+            daysOfWeek.indexOf(a.day) - daysOfWeek.indexOf(b.day);
           if (dayComparison !== 0) return dayComparison;
           return String(a.startTime || "").localeCompare(String(b.startTime || ""));
         });
@@ -194,7 +206,8 @@ function StudentTimetable() {
 
       <h1>My Timetable</h1>
       <p>
-        Welcome, {loggedInStudent.firstName} {loggedInStudent.lastName}! Here is your class timetable:
+        Welcome, {loggedInStudent.firstName} {loggedInStudent.lastName}! Here is
+        your class timetable:
       </p>
 
       {studentSpecificTimetable.length > 0 ? (
@@ -252,8 +265,16 @@ function StudentTimetable() {
       <p style={{ marginTop: "20px" }}>
         Always refer to official school announcements for any timetable changes.
       </p>
+
       <button onClick={handleLogout} style={{ marginTop: "20px" }}>
         Logout
+      </button>
+
+      <button
+        onClick={() => showAlert("Timetable updates automatically when admin updates it.")}
+        style={{ marginTop: 10 }}
+      >
+        Info
       </button>
     </div>
   );

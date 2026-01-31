@@ -1,17 +1,15 @@
-// src/pages/StudentSubjects.js
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import useLocalStorage from '../hooks/useLocalStorage';
-import ConfirmModal from '../components/ConfirmModal';
-
+import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import useLocalStorage from "../hooks/useLocalStorage";
+import ConfirmModal from "../components/ConfirmModal";
 
 function StudentSubjects() {
   const [loggedInStudent, setLoggedInStudent] = useState(null);
-  const [allSubjects] = useLocalStorage('schoolPortalSubjects', []);
+  const [allSubjects] = useLocalStorage("schoolPortalSubjects", []);
   const navigate = useNavigate();
-  
+
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalMessage, setModalMessage] = useState('');
+  const [modalMessage, setModalMessage] = useState("");
   const [isModalAlert, setIsModalAlert] = useState(false);
 
   const showAlert = (msg) => {
@@ -21,17 +19,18 @@ function StudentSubjects() {
   };
 
   useEffect(() => {
-    const user = JSON.parse(localStorage.getItem('loggedInUser'));
-    if (user && user.type === 'student') {
+    const user = JSON.parse(localStorage.getItem("loggedInUser"));
+    if (user && user.type === "student") {
       setLoggedInStudent(user);
     } else {
-      navigate('/login');
+      navigate("/login");
     }
   }, [navigate]);
 
   const handleLogout = () => {
-    localStorage.removeItem('loggedInUser');
-    navigate('/home');
+    localStorage.removeItem("loggedInUser");
+    localStorage.removeItem("authToken");
+    navigate("/home");
   };
 
   if (!loggedInStudent) {
@@ -47,8 +46,11 @@ function StudentSubjects() {
         onCancel={() => setIsModalOpen(false)}
         isAlert={isModalAlert}
       />
+
       <h1>My Subjects</h1>
-      <p>Welcome, {loggedInStudent.firstName} {loggedInStudent.lastName}! Here are the subjects available:</p>
+      <p>
+        Welcome, {loggedInStudent.firstName} {loggedInStudent.lastName}! Here are the subjects available:
+      </p>
 
       {allSubjects.length > 0 ? (
         <div className="table-container">
@@ -61,7 +63,10 @@ function StudentSubjects() {
             </thead>
             <tbody>
               {allSubjects.map((subject, index) => (
-                <tr key={subject.subjectCode} className={index % 2 === 0 ? 'even-row' : 'odd-row'}>
+                <tr
+                  key={subject.subjectCode || subject._id || index}
+                  className={index % 2 === 0 ? "even-row" : "odd-row"}
+                >
                   <td>{subject.subjectName}</td>
                   <td>{subject.subjectCode}</td>
                 </tr>
@@ -73,7 +78,9 @@ function StudentSubjects() {
         <p className="no-data-message">No subjects have been registered in the system yet.</p>
       )}
 
-      <button onClick={handleLogout} className="logout-button">Logout</button>
+      <button onClick={handleLogout} className="logout-button">
+        Logout
+      </button>
     </div>
   );
 }

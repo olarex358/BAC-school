@@ -1,4 +1,3 @@
-// src/pages/StaffProfile.js
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import useLocalStorage from "../hooks/useLocalStorage";
@@ -12,16 +11,13 @@ function StaffProfile() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  const [staffs] = useLocalStorage(
-    "schoolPortalStaff",
-    [],
-    "http://localhost:5000/api/schoolPortalStaff"
-  );
+  // ✅ remove localhost, use relative /api paths
+  const [staffs] = useLocalStorage("schoolPortalStaff", [], "/api/schoolPortalStaff");
 
   const [subjects] = useLocalStorage(
     "schoolPortalSubjects",
     [],
-    "http://localhost:5000/api/schoolPortalSubjects"
+    "/api/schoolPortalSubjects"
   );
 
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -46,12 +42,9 @@ function StaffProfile() {
     }
 
     const staffId =
-      norm(activeUser.staffId) ||
-      norm(activeUser.staffID) ||
-      norm(activeUser.username);
+      norm(activeUser.staffId) || norm(activeUser.staffID) || norm(activeUser.username);
 
-    let found =
-      staffId && staffs.find((s) => norm(s.staffId) === staffId);
+    let found = staffId && (staffs || []).find((s) => norm(s.staffId) === staffId);
 
     // ✅ If not found in staffs list, DO NOT redirect.
     if (!found) {
@@ -73,12 +66,13 @@ function StaffProfile() {
   }, [navigate, staffs, user]);
 
   const getSubjectName = (subjectCode) => {
-    const subject = subjects.find((s) => s.subjectCode === subjectCode);
+    const subject = (subjects || []).find((s) => s.subjectCode === subjectCode);
     return subject ? subject.subjectName : subjectCode;
   };
 
   const handleLogout = () => {
     localStorage.removeItem("loggedInUser");
+    localStorage.removeItem("authToken");
     navigate("/login");
   };
 
@@ -121,8 +115,7 @@ function StaffProfile() {
             <strong>Phone:</strong> <span>{staffInfo.contactPhone}</span>
           </div>
           <div className="profile-item">
-            <strong>Qualifications:</strong>{" "}
-            <span>{staffInfo.qualifications}</span>
+            <strong>Qualifications:</strong> <span>{staffInfo.qualifications}</span>
           </div>
           <div className="profile-item">
             <strong>Assigned Classes:</strong>{" "}

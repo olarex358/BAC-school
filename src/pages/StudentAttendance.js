@@ -1,5 +1,5 @@
 // src/pages/StudentAttendance.js
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import useLocalStorage from "../hooks/useLocalStorage";
 import ConfirmModal from "../components/ConfirmModal";
@@ -10,63 +10,71 @@ function StudentAttendance() {
   const [loggedInStudent, setLoggedInStudent] = useState(null);
   const navigate = useNavigate();
 
+  // ✅ READ-ONLY attendance cache (no apiUrl here)
   const [allAttendanceRecords, , loadingAttendance] = useLocalStorage(
     "schoolPortalAttendance",
-    [],
-    "http://localhost:5000/api/schoolPortalAttendance"
+    []
   );
-
-  const [studentAttendance, setStudentAttendance] = useState([]);
-  const [attendanceSummary, setAttendanceSummary] = useState({
-    present: 0,
-    absent: 0,
-    late: 0,
-    totalRecords: 0,
-    percentage: 0,
-  });
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMessage, setModalMessage] = useState("");
 
+  /* =========================
+     AUTH CHECK
+  ========================= */
   useEffect(() => {
     const user = JSON.parse(localStorage.getItem("loggedInUser"));
-    if (user && user.type === "student") setLoggedInStudent(user);
-    else navigate("/login");
+    if (user && user.type === "student") {
+      setLoggedInStudent(user);
+    } else {
+      navigate("/login");
+    }
   }, [navigate]);
 
-  useEffect(() => {
-    if (!loggedInStudent) return;
+  /* =========================
+     FILTER STUDENT RECORDS
+  ========================= */
+  const studentAttendance = useMemo(() => {
+    if (!loggedInStudent) return [];
 
     const adm = loggedInStudent.admissionNo;
 
-    const filteredRecords = (allAttendanceRecords || [])
-      .filter((record) => (record.admissionNo || record.studentId) === adm)
+    return (allAttendanceRecords || [])
+      .filter(
+        (r) =>
+          (r.admissionNo || r.studentId) === adm
+      )
       .sort((a, b) => new Date(b.date) - new Date(a.date));
+  }, [loggedInStudent, allAttendanceRecords]);
 
-    setStudentAttendance(filteredRecords);
+  /* =========================
+     SUMMARY
+  ========================= */
+  const attendanceSummary = useMemo(() => {
+    let present = 0;
+    let absent = 0;
+    let late = 0;
 
-    let presentCount = 0;
-    let absentCount = 0;
-    let lateCount = 0;
-
-    filteredRecords.forEach((record) => {
-      const st = record.status || record.attendanceStatus;
-      if (st === "Present") presentCount++;
-      else if (st === "Absent") absentCount++;
-      else if (st === "Late") lateCount++;
+    studentAttendance.forEach((r) => {
+      const st = r.status || r.attendanceStatus;
+      if (st === "Present") present++;
+      else if (st === "Absent") absent++;
+      else if (st === "Late") late++;
     });
 
-    const totalRecords = filteredRecords.length;
-    const percentage = totalRecords ? ((presentCount / totalRecords) * 100).toFixed(2) : 0;
+    const totalRecords = studentAttendance.length;
+    const percentage = totalRecords
+      ? ((present / totalRecords) * 100).toFixed(2)
+      : 0;
 
-    setAttendanceSummary({
-      present: presentCount,
-      absent: absentCount,
-      late: lateCount,
+    return {
+      present,
+      absent,
+      late,
       totalRecords,
       percentage,
-    });
-  }, [loggedInStudent, allAttendanceRecords]);
+    };
+  }, [studentAttendance]);
 
   const showAlert = (msg) => {
     setModalMessage(msg);
@@ -74,7 +82,7 @@ function StudentAttendance() {
   };
 
   if (!loggedInStudent || loadingAttendance) {
-    return <div className="content-section">Loading attendance...</div>;
+    return <div className="content-section">Loading attendance…</div>;
   }
 
   return (
@@ -90,7 +98,11 @@ function StudentAttendance() {
       />
 
       <h1>
-        <img src={attendanceIcon} alt="" style={{ width: 30, marginRight: 8 }} />
+        <img
+          src={attendanceIcon}
+          alt=""
+          style={{ width: 30, marginRight: 8 }}
+        />
         My Attendance
       </h1>
 
@@ -128,19 +140,30 @@ function StudentAttendance() {
             </tr>
           </thead>
           <tbody>
-            {studentAttendance.map((r, idx) => (
-              <tr key={r._id || r.id || idx}>
-                <td>{r.date}</td>
-                <td>{r.class || r.classSelect}</td>
-                <td>{r.status || r.attendanceStatus}</td>
-                <td>{r.markedBy || "-"}</td>
+            {studentAttendance.length ? (
+              studentAttendance.map((r, idx) => (
+                <tr key={r._id || r.id || idx}>
+                  <td>{r.date}</td>
+                  <td>{r.class}</td>
+                  <td>{r.status}</td>
+                  <td>{r.markedBy || "-"}</td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan="4">No attendance records found.</td>
               </tr>
-            ))}
+            )}
           </tbody>
         </table>
       </div>
 
-      <button onClick={() => showAlert("Attendance is updated automatically.")} className="logout-button">
+      <button
+        onClick={() =>
+          showAlert("Attendance updates automatically when your teacher marks it.")
+        }
+        className="logout-button"
+      >
         Info
       </button>
     </div>

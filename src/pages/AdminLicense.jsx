@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { apiFetch } from "../api";
 
 function AdminLicense() {
   const [status, setStatus] = useState("");
@@ -7,46 +8,53 @@ function AdminLicense() {
   const [days, setDays] = useState(365);
   const [msg, setMsg] = useState("");
 
-  const token = localStorage.getItem("adminToken");
-
   useEffect(() => {
-    fetch("http://localhost:5000/api/license/status", {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    })
-      .then(res => res.json())
-      .then(data => {
-        setStatus(data.licenseStatus);
-        setExpiry(data.licenseExpiry);
-      });
-  }, [token]);
+    const load = async () => {
+      try {
+        const res = await apiFetch("/api/license/status");
+        const data = await res.json().catch(() => ({}));
 
-  const activateLicense = async e => {
+        if (!res.ok) {
+          setMsg(data.message || "Failed to load license status.");
+          return;
+        }
+
+        setStatus(data.licenseStatus || "");
+        setExpiry(data.licenseExpiry || "");
+      } catch {
+        setMsg("Network error while loading license status.");
+      }
+    };
+
+    load();
+  }, []);
+
+  const activateLicense = async (e) => {
     e.preventDefault();
     setMsg("");
 
-    const res = await fetch("http://localhost:5000/api/license/activate", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        productKey,
-        durationInDays: days,
-      }),
-    });
+    try {
+      const res = await apiFetch("/api/license/activate", {
+        method: "POST",
+        body: JSON.stringify({
+          productKey,
+          durationInDays: Number(days) || 365,
+        }),
+      });
 
-    const data = await res.json();
-    if (!res.ok) {
-      setMsg(data.message);
-      return;
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        setMsg(data.message || "License activation failed.");
+        return;
+      }
+
+      setMsg("License activated successfully ✅");
+      setExpiry(data.licenseExpiry || "");
+      setStatus(data.licenseStatus || "active");
+    } catch {
+      setMsg("Network error. Please try again.");
     }
-
-    setMsg("License activated successfully");
-    setExpiry(data.licenseExpiry);
-    setStatus("active");
   };
 
   return (
@@ -56,7 +64,7 @@ function AdminLicense() {
       <p>
         <strong>Status:</strong>{" "}
         <span style={{ color: status === "active" ? "green" : "red" }}>
-          {status}
+          {status || "-"}
         </span>
       </p>
 
@@ -71,7 +79,7 @@ function AdminLicense() {
         <input
           placeholder="Product key (BC-XXXX)"
           value={productKey}
-          onChange={e => setProductKey(e.target.value)}
+          onChange={(e) => setProductKey(e.target.value)}
           required
         />
 
@@ -79,14 +87,14 @@ function AdminLicense() {
           type="number"
           placeholder="Duration (days)"
           value={days}
-          onChange={e => setDays(e.target.value)}
+          onChange={(e) => setDays(e.target.value)}
           required
         />
 
-        <button>Activate / Renew License</button>
+        <button type="submit">Activate / Renew License</button>
       </form>
 
-      {msg && <p>{msg}</p>}
+      {msg && <p style={{ marginTop: 10 }}>{msg}</p>}
     </div>
   );
 }

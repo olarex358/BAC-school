@@ -14,12 +14,9 @@ const parsePeriodToTimes = (period) => {
   const p = norm(period);
   if (!p) return { startTime: "", endTime: "", label: "" };
 
-  // Accept dash or en-dash, accept optional spaces
   const m = p.match(/(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})/);
-  if (m) {
-    return { startTime: m[1], endTime: m[2], label: p };
-  }
-  // fallback: use period as label and as slot
+  if (m) return { startTime: m[1], endTime: m[2], label: p };
+
   return { startTime: p, endTime: "", label: p };
 };
 
@@ -27,33 +24,30 @@ const resolveSubjectCode = (subjectValue, subjects) => {
   const val = norm(subjectValue);
   if (!val) return "";
 
-  // If already looks like a code, keep it
-  const direct = subjects.find((s) => norm(s.subjectCode) === val);
+  const direct = (subjects || []).find((s) => norm(s.subjectCode) === val);
   if (direct) return direct.subjectCode;
 
-  // Try match by name
-  const byName = subjects.find((s) => normLower(s.subjectName) === normLower(val));
-  return byName ? byName.subjectCode : val; // fallback to raw
+  const byName = (subjects || []).find(
+    (s) => normLower(s.subjectName) === normLower(val)
+  );
+  return byName ? byName.subjectCode : val;
 };
 
 const resolveTeacherId = (teacherValue, staffs) => {
   const val = norm(teacherValue);
   if (!val) return "";
 
-  // If already a staffId
-  const direct = staffs.find((s) => norm(s.staffId) === val);
+  const direct = (staffs || []).find((s) => norm(s.staffId) === val);
   if (direct) return direct.staffId;
 
-  // Try match by "firstname surname"
-  const byName = staffs.find((s) => {
+  const byName = (staffs || []).find((s) => {
     const full = `${norm(s.firstname)} ${norm(s.surname)}`.trim();
     return normLower(full) === normLower(val);
   });
-  return byName ? byName.staffId : val; // fallback to raw
+  return byName ? byName.staffId : val;
 };
 
 const normalizeEntry = (entry, subjects, staffs) => {
-  // If already in staff/student timetable format, keep it but add safe defaults
   const hasOldShape =
     entry?.classSelect || entry?.subjectSelect || entry?.startTime || entry?.endTime;
 
@@ -62,11 +56,10 @@ const normalizeEntry = (entry, subjects, staffs) => {
       ...entry,
       day: entry.day || "Monday",
       classSelect: entry.classSelect || entry.className || "",
-      subjectSelect: entry.subjectSelect || resolveSubjectCode(entry.subject, subjects) || "",
+      subjectSelect:
+        entry.subjectSelect || resolveSubjectCode(entry.subject, subjects) || "",
       teacherSelect:
-        entry.teacherSelect ||
-        resolveTeacherId(entry.teacher, staffs) ||
-        "",
+        entry.teacherSelect || resolveTeacherId(entry.teacher, staffs) || "",
       startTime: entry.startTime || "",
       endTime: entry.endTime || "",
       location: entry.location || entry.room || "",
@@ -78,18 +71,18 @@ const normalizeEntry = (entry, subjects, staffs) => {
   const { startTime, endTime, label } = parsePeriodToTimes(entry?.period);
 
   return {
-    _id: entry?._id || entry?.id || `${entry?.className}-${entry?.day}-${entry?.period}-${entry?.subject}`,
+    _id:
+      entry?._id ||
+      entry?.id ||
+      `${entry?.className}-${entry?.day}-${entry?.period}-${entry?.subject}`,
     day: entry?.day || "Monday",
     classSelect: entry?.className || "",
     subjectSelect: resolveSubjectCode(entry?.subject, subjects),
     teacherSelect: resolveTeacherId(entry?.teacher, staffs),
     startTime,
     endTime,
-    // Use room as location
     location: entry?.room || "",
-    // Use a safe default so .toLowerCase never crashes
     type: "Class",
-    // Keep original values too (harmless)
     rawPeriod: label,
   };
 };
@@ -98,20 +91,23 @@ function StaffTimetable() {
   const navigate = useNavigate();
   const [loggedInStaff, setLoggedInStaff] = useState(null);
 
+  // ✅ remove localhost and use relative /api paths
   const [allTimetableEntries, , loadingTimetable] = useLocalStorage(
     "schoolPortalTimetables",
     [],
-    "http://localhost:5000/api/schoolPortalTimetables"
+    "/api/schoolPortalTimetables"
   );
+
   const [subjects] = useLocalStorage(
     "schoolPortalSubjects",
     [],
-    "http://localhost:5000/api/schoolPortalSubjects"
+    "/api/schoolPortalSubjects"
   );
+
   const [staffs] = useLocalStorage(
     "schoolPortalStaff",
     [],
-    "http://localhost:5000/api/schoolPortalStaff"
+    "/api/schoolPortalStaff"
   );
 
   const [staffSpecificTimetable, setStaffSpecificTimetable] = useState([]);
@@ -147,21 +143,20 @@ function StaffTimetable() {
       const teacherAssignedSubjects = loggedInStaff.assignedSubjects || [];
       const myId = loggedInStaff.staffId;
 
-      const myName = `${norm(loggedInStaff.firstname)} ${norm(loggedInStaff.surname)}`.trim();
+      const myName = `${norm(loggedInStaff.firstname)} ${norm(
+        loggedInStaff.surname
+      )}`.trim();
 
       const filteredForStaff = normalizedEntries
         .filter((entry) => {
-          // class restriction
           const isAssignedClass =
             teacherAssignedClasses.length === 0 ||
             teacherAssignedClasses.includes(entry.classSelect);
 
-          // subject restriction
           const isAssignedSubject =
             teacherAssignedSubjects.length === 0 ||
             teacherAssignedSubjects.includes(entry.subjectSelect);
 
-          // teacher match (handles admin storing name or staffId)
           const teacherMatches =
             norm(entry.teacherSelect) === norm(myId) ||
             normLower(entry.teacherSelect) === normLower(myName);
@@ -169,7 +164,8 @@ function StaffTimetable() {
           return isAssignedClass && isAssignedSubject && teacherMatches;
         })
         .sort((a, b) => {
-          const dayComparison = daysOfWeek.indexOf(a.day) - daysOfWeek.indexOf(b.day);
+          const dayComparison =
+            daysOfWeek.indexOf(a.day) - daysOfWeek.indexOf(b.day);
           if (dayComparison !== 0) return dayComparison;
           return String(a.startTime || "").localeCompare(String(b.startTime || ""));
         });
@@ -186,11 +182,8 @@ function StaffTimetable() {
   };
 
   const getTeacherName = (staffIdOrName) => {
-    // staffId
     const teacher = (staffs || []).find((s) => s.staffId === staffIdOrName);
     if (teacher) return `${teacher.firstname} ${teacher.surname}`;
-
-    // maybe it's already a name
     return staffIdOrName || "Unknown Teacher";
   };
 
@@ -240,7 +233,8 @@ function StaffTimetable() {
 
       <h1>My Teaching Timetable</h1>
       <p>
-        Welcome, {loggedInStaff.firstname} {loggedInStaff.surname}! Here is your teaching timetable:
+        Welcome, {loggedInStaff.firstname} {loggedInStaff.surname}! Here is your
+        teaching timetable:
       </p>
 
       {staffSpecificTimetable.length > 0 ? (
@@ -295,15 +289,26 @@ function StaffTimetable() {
         </div>
       ) : (
         <p>
-          No timetable entries found for your assigned classes and subjects yet. Please contact administration.
+          No timetable entries found for your assigned classes and subjects yet.
+          Please contact administration.
         </p>
       )}
 
       <p style={{ marginTop: "20px" }}>
         Always refer to official school announcements for any timetable changes.
       </p>
+
       <button onClick={handleLogout} style={{ marginTop: "20px" }}>
         Logout
+      </button>
+
+      <button
+        onClick={() =>
+          showAlert("Timetable updates automatically when admin updates it.")
+        }
+        style={{ marginTop: 10 }}
+      >
+        Info
       </button>
     </div>
   );

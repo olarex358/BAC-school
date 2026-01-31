@@ -1,29 +1,54 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import io from 'socket.io-client';
+// src/context/SocketContext.js
+import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import io from "socket.io-client";
 
-const SocketContext = createContext();
+const SocketContext = createContext(null);
 
-export const useSocket = () => {
-    return useContext(SocketContext);
-};
+export const useSocket = () => useContext(SocketContext);
 
 export const SocketProvider = ({ children }) => {
-    const [socket, setSocket] = useState(null);
+  const [socket, setSocket] = useState(null);
 
-    useEffect(() => {
-        // Connect to the Socket.IO server
-        const newSocket = io('http://localhost:5000');
-        setSocket(newSocket);
+  // ✅ Use same base as apiFetch
+  const socketUrl = useMemo(() => {
+    // If you deploy backend on Render, set REACT_APP_API_URL in frontend env
+    // Example: https://school-portal-backend-i29s.onrender.com
+    return process.env.REACT_APP_API_URL || "";
+  }, []);
 
-        // Clean up the connection when the component unmounts
-        return () => {
-            newSocket.disconnect();
-        };
-    }, []);
+  useEffect(() => {
+    // ✅ v0.1: sockets are optional. If no URL, skip silently.
+    if (!socketUrl) return;
 
-    return (
-        <SocketContext.Provider value={socket}>
-            {children}
-        </SocketContext.Provider>
-    );
+    // ✅ avoid connecting while offline
+    if (!navigator.onLine) return;
+
+    const token =
+      localStorage.getItem("authToken") ||
+      localStorage.getItem("token") ||
+      "";
+
+    const s = io(socketUrl, {
+      transports: ["websocket"],
+      auth: token ? { token } : undefined, // backend can read socket.handshake.auth.token
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+    });
+
+    setSocket(s);
+
+    return () => {
+      try {
+        s.disconnect();
+      } catch {}
+      setSocket(null);
+    };
+  }, [socketUrl]);
+
+  return (
+    <SocketContext.Provider value={socket}>
+      {children}
+    </SocketContext.Provider>
+  );
 };

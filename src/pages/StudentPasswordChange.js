@@ -1,16 +1,26 @@
-// src/pages/StudentPasswordChange.js
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import passwordIcon from "../icon/password.png";
+import ConfirmModal from "../components/ConfirmModal";
+import { apiFetch } from "../api";
 
 function StudentPasswordChange() {
   const [loggedInStudent, setLoggedInStudent] = useState(null);
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
-  const [message, setMessage] = useState("");
+  const [formErrors, setFormErrors] = useState({});
 
   const navigate = useNavigate();
+
+  // Modal
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [modalMessage, setModalMessage] = useState("");
+
+  const showAlert = (msg) => {
+    setModalMessage(msg);
+    setIsModalOpen(true);
+  };
 
   useEffect(() => {
     const user = JSON.parse(localStorage.getItem("loggedInUser"));
@@ -21,24 +31,30 @@ function StudentPasswordChange() {
     }
   }, [navigate]);
 
-  const handlePasswordChange = async e => {
-    e.preventDefault();
-    setMessage("");
-
+  const validateForm = () => {
+    const errors = {};
     if (newPassword.length < 6) {
-      setMessage("New password must be at least 6 characters.");
-      return;
+      errors.newPassword = "New password must be at least 6 characters.";
     }
-
     if (newPassword !== confirmNewPassword) {
-      setMessage("Passwords do not match.");
+      errors.confirmNewPassword = "Passwords do not match.";
+    }
+    setFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const handlePasswordChange = async (e) => {
+    e.preventDefault();
+    setFormErrors({});
+
+    if (!validateForm()) {
+      showAlert("Please correct the errors in the form.");
       return;
     }
 
     try {
-      const res = await fetch("http://localhost:5000/api/change-password", {
+      const res = await apiFetch("/api/change-password", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: loggedInStudent._id,
           oldPassword,
@@ -46,23 +62,22 @@ function StudentPasswordChange() {
         }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        setMessage(data.message || "Password change failed.");
+        showAlert(data.message || "Password change failed.");
         return;
       }
 
-      setMessage(
-        "Password changed successfully! You will be logged out."
-      );
+      showAlert("Password changed successfully! You will be logged out.");
 
       setTimeout(() => {
         localStorage.removeItem("loggedInUser");
+        localStorage.removeItem("authToken");
         navigate("/login");
       }, 1500);
-    } catch (err) {
-      setMessage("Network error. Please try again.");
+    } catch {
+      showAlert("Network error. Please try again.");
     }
   };
 
@@ -72,6 +87,14 @@ function StudentPasswordChange() {
 
   return (
     <div className="content-section">
+      <ConfirmModal
+        isOpen={isModalOpen}
+        message={modalMessage}
+        onConfirm={() => setIsModalOpen(false)}
+        onCancel={() => setIsModalOpen(false)}
+        isAlert
+      />
+
       <h1>Change Password</h1>
       <p>
         Welcome, {loggedInStudent.firstName} {loggedInStudent.lastName}
@@ -87,7 +110,7 @@ function StudentPasswordChange() {
           placeholder="Old password"
           required
           value={oldPassword}
-          onChange={e => setOldPassword(e.target.value)}
+          onChange={(e) => setOldPassword(e.target.value)}
         />
 
         <input
@@ -95,21 +118,21 @@ function StudentPasswordChange() {
           placeholder="New password"
           required
           value={newPassword}
-          onChange={e => setNewPassword(e.target.value)}
+          onChange={(e) => setNewPassword(e.target.value)}
         />
+        {formErrors.newPassword && (
+          <p className="error">{formErrors.newPassword}</p>
+        )}
 
         <input
           type="password"
           placeholder="Confirm new password"
           required
           value={confirmNewPassword}
-          onChange={e => setConfirmNewPassword(e.target.value)}
+          onChange={(e) => setConfirmNewPassword(e.target.value)}
         />
-
-        {message && (
-          <p style={{ color: message.includes("success") ? "green" : "red" }}>
-            {message}
-          </p>
+        {formErrors.confirmNewPassword && (
+          <p className="error">{formErrors.confirmNewPassword}</p>
         )}
 
         <button type="submit">Change Password</button>

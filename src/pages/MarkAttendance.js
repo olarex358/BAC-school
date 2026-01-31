@@ -1,44 +1,34 @@
 // src/pages/MarkAttendance.js
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import useLocalStorage from "../hooks/useLocalStorage";
+import { apiFetch } from "../api";
 import ConfirmModal from "../components/ConfirmModal";
 import AttendanceNav from "../components/AttendanceNav";
+import { getCurrentAcademicPeriod } from "../utils/academicPeriod";
 
 const LOCK_DAYS = 2;
 const LS_ATT = "schoolPortalAttendance";
-
-const readLS = (key, fallback = []) => {
-  try {
-    return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback));
-  } catch {
-    return fallback;
-  }
-};
-
-const writeLS = (key, value) => {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {}
-};
 
 function MarkAttendance() {
   const navigate = useNavigate();
   const [teacher, setTeacher] = useState(null);
 
+  // students (READ-ONLY sync from backend)
   const [students] = useLocalStorage(
     "schoolPortalStudents",
     [],
-    "http://localhost:5000/api/schoolPortalStudents"
+    "/api/schoolPortalStudents"
   );
 
-  const [attendanceRecords, setAttendanceRecords] = useState(() =>
-    readLS(LS_ATT, [])
+  // attendance is LOCAL-FIRST
+  const [attendanceRecords, setAttendanceRecords] = useLocalStorage(
+    LS_ATT,
+    []
   );
 
   const [selectedClass, setSelectedClass] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
-  const [studentsInClass, setStudentsInClass] = useState([]);
   const [attendanceState, setAttendanceState] = useState({});
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -49,43 +39,42 @@ function MarkAttendance() {
     setModalOpen(true);
   };
 
+  /* =========================
+     AUTH CHECK
+  ========================= */
   useEffect(() => {
     const user = JSON.parse(localStorage.getItem("loggedInUser"));
     if (user && user.type === "staff") setTeacher(user);
     else navigate("/login");
   }, [navigate]);
 
-  useEffect(() => {
-    const loadAttendance = async () => {
-      try {
-        const res = await fetch("http://localhost:5000/api/schoolPortalAttendance");
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          setAttendanceRecords(data);
-          writeLS(LS_ATT, data);
-        }
-      } catch {
-        // keep offline cache
-      }
-    };
-    loadAttendance();
-  }, []);
+  /* =========================
+     STUDENTS IN CLASS
+  ========================= */
+  const studentsInClass = useMemo(() => {
+    if (!selectedClass) return [];
+    return students.filter((s) => s.studentClass === selectedClass);
+  }, [students, selectedClass]);
 
+  /* =========================
+     INIT ATTENDANCE STATE
+  ========================= */
   useEffect(() => {
-    if (!selectedClass) {
-      setStudentsInClass([]);
+    if (!studentsInClass.length) {
       setAttendanceState({});
       return;
     }
 
-    const filtered = students.filter((s) => s.studentClass === selectedClass);
-    setStudentsInClass(filtered);
-
     const init = {};
-    filtered.forEach((stu) => (init[stu.admissionNo] = "Present"));
+    studentsInClass.forEach((stu) => {
+      init[stu.admissionNo] = "Present";
+    });
     setAttendanceState(init);
-  }, [selectedClass, students]);
+  }, [studentsInClass]);
 
+  /* =========================
+     DATE LOCK
+  ========================= */
   const isDateLocked = (dateStr) => {
     if (!dateStr) return false;
     const selected = new Date(dateStr);
@@ -94,72 +83,72 @@ function MarkAttendance() {
     return diff > LOCK_DAYS;
   };
 
+  /* =========================
+     SUBMIT ATTENDANCE
+  ========================= */
   const handleSubmitAttendance = async (e) => {
     e.preventDefault();
 
-    if (!selectedClass || !selectedDate) return showAlert("Select class and date.");
-    if (isDateLocked(selectedDate))
-      return showAlert(`You can only edit attendance within ${LOCK_DAYS} days.`);
+    if (!selectedClass || !selectedDate) {
+      return showAlert("Select class and date.");
+    }
 
-    // ✅ canonical records (keep studentId too for backward compatibility)
+    if (isDateLocked(selectedDate)) {
+      return showAlert(`You can only edit attendance within ${LOCK_DAYS} days.`);
+    }
+
+    const period = getCurrentAcademicPeriod();
+
+    // ✅ canonical records (backend-aligned)
     const records = studentsInClass.map((stu) => ({
-      id: `${selectedDate}-${selectedClass}-${stu.admissionNo}`,
       date: selectedDate,
       class: selectedClass,
-      admissionNo: stu.admissionNo, // ✅ canonical
-      studentId: stu.admissionNo,   // ✅ legacy support
+      admissionNo: stu.admissionNo,
       status: attendanceState[stu.admissionNo] || "Present",
       markedBy: teacher?.staffId || teacher?.username || "staff",
-      timestamp: new Date().toISOString(),
+      session: period.session,
+      term: period.term,
     }));
 
-    try {
-      // delete old same-day records first
-      const old = attendanceRecords.filter(
-        (r) => (r.class || r.classSelect) === selectedClass && r.date === selectedDate
-      );
-
-      await Promise.all(
-        old
-          .filter((r) => r._id)
-          .map((r) =>
-            fetch(`http://localhost:5000/api/schoolPortalAttendance/${r._id}`, {
-              method: "DELETE",
-            })
+    // ✅ local-first save (no wipe)
+    const mergedLocal = [
+      ...attendanceRecords.filter(
+        (r) =>
+          !(
+            r.date === selectedDate &&
+            r.class === selectedClass &&
+            records.some((x) => x.admissionNo === r.admissionNo)
           )
-      );
+      ),
+      ...records,
+    ];
 
-      // post new
-      await Promise.all(
-        records.map((r) =>
-          fetch("http://localhost:5000/api/schoolPortalAttendance", {
+    setAttendanceRecords(mergedLocal);
+
+    // ✅ background sync (online only)
+    if (navigator.onLine) {
+      try {
+        for (const r of records) {
+          await apiFetch("/api/schoolPortalAttendance", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
             body: JSON.stringify(r),
-          })
-        )
-      );
-
-      // refresh from server
-      const refreshed = await fetch("http://localhost:5000/api/schoolPortalAttendance");
-      const data = await refreshed.json();
-
-      if (Array.isArray(data)) {
-        setAttendanceRecords(data);
-        writeLS(LS_ATT, data);
+          });
+        }
+      } catch {
+        // silent — local copy already saved
       }
-
-      showAlert("Attendance saved successfully.");
-    } catch {
-      // ✅ still save locally so refresh keeps it
-      const merged = [...records, ...attendanceRecords].slice(0, 10000);
-      setAttendanceRecords(merged);
-      writeLS(LS_ATT, merged);
-      showAlert("Saved offline (online sync later).");
     }
+
+    showAlert(
+      navigator.onLine
+        ? "Attendance saved successfully."
+        : "Saved offline. Will sync when online."
+    );
   };
 
-  if (!teacher) return <div className="content-section">Access Denied</div>;
+  if (!teacher) {
+    return <div className="content-section">Access Denied</div>;
+  }
 
   return (
     <div className="content-section">
@@ -176,14 +165,25 @@ function MarkAttendance() {
       <h1>Mark Attendance</h1>
 
       <form onSubmit={handleSubmitAttendance}>
-        <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)}>
+        <select
+          value={selectedClass}
+          onChange={(e) => setSelectedClass(e.target.value)}
+        >
           <option value="">Select Class</option>
-          {[...new Set(students.map((s) => s.studentClass).filter(Boolean))].sort().map((c) => (
-            <option key={c} value={c}>{c}</option>
-          ))}
+          {[...new Set(students.map((s) => s.studentClass).filter(Boolean))]
+            .sort()
+            .map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
         </select>
 
-        <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} />
+        <input
+          type="date"
+          value={selectedDate}
+          onChange={(e) => setSelectedDate(e.target.value)}
+        />
 
         {studentsInClass.length > 0 && (
           <table className="attendance-table">
@@ -200,12 +200,17 @@ function MarkAttendance() {
                 <tr key={stu.admissionNo}>
                   <td>{index + 1}</td>
                   <td>{stu.admissionNo}</td>
-                  <td>{stu.firstName} {stu.lastName}</td>
+                  <td>
+                    {stu.firstName} {stu.lastName}
+                  </td>
                   <td>
                     <select
                       value={attendanceState[stu.admissionNo] || "Present"}
                       onChange={(e) =>
-                        setAttendanceState((p) => ({ ...p, [stu.admissionNo]: e.target.value }))
+                        setAttendanceState((p) => ({
+                          ...p,
+                          [stu.admissionNo]: e.target.value,
+                        }))
                       }
                     >
                       <option value="Present">Present</option>

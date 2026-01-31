@@ -1,4 +1,3 @@
-// src/pages/StudentProfile.js
 import React, { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import useLocalStorage from "../hooks/useLocalStorage";
@@ -15,22 +14,23 @@ function StudentProfile() {
   const [activeTab, setActiveTab] = useState("profile");
   const [studentProfile, setStudentProfile] = useState(null);
 
+  // ✅ remove localhost and use /api paths (safe read sync)
   const [students, , loadingStudents] = useLocalStorage(
     "schoolPortalStudents",
     [],
-    "http://localhost:5000/api/schoolPortalStudents"
+    "/api/schoolPortalStudents"
   );
 
   const [results] = useLocalStorage(
     "schoolPortalResults",
     [],
-    "http://localhost:5000/api/schoolPortalResults"
+    "/api/schoolPortalResults"
   );
 
   const [attendance] = useLocalStorage(
     "schoolPortalAttendance",
     [],
-    "http://localhost:5000/api/schoolPortalAttendance"
+    "/api/schoolPortalAttendance"
   );
 
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -41,21 +41,17 @@ function StudentProfile() {
     const legacyUser = JSON.parse(localStorage.getItem("loggedInUser"));
     const activeUser = user || legacyUser;
 
-    // ✅ only redirect if NO auth at all
     if (!activeUser) {
       navigate("/login");
       return;
     }
 
-    // ✅ normalize type check
-    const type = String(activeUser.type || activeUser.userType || activeUser.role || "")
-      .toLowerCase();
+    const type = String(activeUser.type || activeUser.userType || activeUser.role || "").toLowerCase();
     if (!type.includes("student")) {
       navigate("/login");
       return;
     }
 
-    // ✅ try to match student record with multiple keys
     const admissionNo =
       norm(activeUser.admissionNo) ||
       norm(activeUser.username) ||
@@ -63,10 +59,9 @@ function StudentProfile() {
 
     let found =
       admissionNo &&
-      students.find((s) => norm(s.admissionNo) === admissionNo);
+      (students || []).find((s) => norm(s.admissionNo) === admissionNo);
 
     // ✅ If not found in students list, DO NOT redirect.
-    // Fallback to activeUser so profile still opens.
     if (!found) {
       found = {
         firstName: activeUser.firstName || activeUser.firstname || "Student",
@@ -87,21 +82,31 @@ function StudentProfile() {
 
   const handleLogout = () => {
     localStorage.removeItem("loggedInUser");
+    localStorage.removeItem("authToken");
     navigate("/login");
   };
 
   const myResults = useMemo(() => {
     if (!studentProfile) return [];
-    return results.filter(
-      (r) =>
-        r.studentAdmissionNo === studentProfile.admissionNo &&
-        r.status === "Approved"
-    );
+    const adm = norm(studentProfile.admissionNo);
+
+    return (results || []).filter((r) => {
+      const admissionNo =
+        norm(r.studentAdmissionNo) || norm(r.studentNameSelect) || norm(r.admissionNo);
+
+      const status = norm(r.status) || (r.approved ? "Approved" : "");
+      return admissionNo === adm && status.toLowerCase() === "approved";
+    });
   }, [results, studentProfile]);
 
   const myAttendance = useMemo(() => {
     if (!studentProfile) return [];
-    return attendance.filter((a) => a.studentId === studentProfile.admissionNo);
+    const adm = norm(studentProfile.admissionNo);
+
+    return (attendance || []).filter((a) => {
+      const admissionNo = norm(a.admissionNo) || norm(a.studentId);
+      return admissionNo === adm;
+    });
   }, [attendance, studentProfile]);
 
   if (!studentProfile || loadingStudents) {
@@ -145,8 +150,7 @@ function StudentProfile() {
         <div className="profile-card">
           <div className="profile-details">
             <p>
-              <strong>Full Name:</strong> {studentProfile.firstName}{" "}
-              {studentProfile.lastName}
+              <strong>Full Name:</strong> {studentProfile.firstName} {studentProfile.lastName}
             </p>
             <p>
               <strong>Admission No:</strong> {studentProfile.admissionNo}
@@ -170,8 +174,7 @@ function StudentProfile() {
               <strong>Enrollment Date:</strong> {studentProfile.enrollmentDate}
             </p>
             <p>
-              <strong>Medical Notes:</strong>{" "}
-              {studentProfile.medicalNotes || "N/A"}
+              <strong>Medical Notes:</strong> {studentProfile.medicalNotes || "N/A"}
             </p>
           </div>
         </div>

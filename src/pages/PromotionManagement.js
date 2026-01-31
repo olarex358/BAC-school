@@ -1,31 +1,42 @@
-import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import useLocalStorage from '../hooks/useLocalStorage';
-import ConfirmModal from '../components/ConfirmModal';
+import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import useLocalStorage from "../hooks/useLocalStorage";
+import ConfirmModal from "../components/ConfirmModal";
+import { apiFetch } from "../api";
 
 /* ===========================
    ROLE DEFINITIONS
 =========================== */
 const ROLES = {
-  ACADEMIC_MANAGER: 'Academic Manager',
-  ADMIN: 'Admin',
-  PRINCIPAL: 'Principal',
-  SUPER_ADMIN: 'Super Admin'
+  ACADEMIC_MANAGER: "Academic Manager",
+  ADMIN: "Admin",
+  PRINCIPAL: "Principal",
+  SUPER_ADMIN: "Super Admin",
 };
 
 /* ===========================
    CLASS PROGRESSION MAP
 =========================== */
 const CLASS_PROGRESS = {
-  'JSS 1': 'JSS 2',
-  'JSS 2': 'JSS 3',
-  'JSS 3': 'SSS 1',
-  'SSS 1': 'SSS 2',
-  'SSS 2': 'SSS 3',
-  'SSS 3': 'GRADUATED'
+  "JSS 1": "JSS 2",
+  "JSS 2": "JSS 3",
+  "JSS 3": "SSS 1",
+  "SSS 1": "SSS 2",
+  "SSS 2": "SSS 3",
+  "SSS 3": "GRADUATED",
 };
 
-function PromotionManagement() {
+const readLS = (key, fallback) => {
+  try {
+    return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback));
+  } catch {
+    return fallback;
+  }
+};
+
+const norm = (v) => String(v ?? "").trim();
+
+export default function PromotionManagement() {
   const navigate = useNavigate();
 
   /* ===========================
@@ -34,33 +45,53 @@ function PromotionManagement() {
   const [user, setUser] = useState(null);
 
   /* ===========================
-     DATA (OFFLINE-FIRST)
+     DATA (offline-first + safe server READ)
+     - students: read from server when online via hook
+     - promotions: local-only storage for UI (we also pull from server once)
   =========================== */
   const [students, setStudents] = useLocalStorage(
-    'schoolPortalStudents',
+    "schoolPortalStudents",
     [],
-    'http://localhost:5000/api/schoolPortalStudents'
+    "/api/schoolPortalStudents"
   );
 
-  const [promotions, setPromotions] = useLocalStorage(
-    'schoolPortalPromotions',
-    [],
-    'http://localhost:5000/api/schoolPortalPromotions'
-  );
+  const [promotions, setPromotions] = useLocalStorage("schoolPortalPromotions", []);
 
   /* ===========================
-     STATE
+     ACADEMIC STATE (v0.1 authority)
+     Must exist in localStorage:
+     schoolPortalAcademicState = {
+       session: "2025/2026",
+       term: "Third Term",
+       promotionAllowed: true
+     }
   =========================== */
-  const [selectedClass, setSelectedClass] = useState('');
+  const academicState = useMemo(() => {
+    const s = readLS("schoolPortalAcademicState", null);
+    if (s && typeof s === "object") {
+      return {
+        session: norm(s.session),
+        term: norm(s.term),
+        promotionAllowed: !!s.promotionAllowed,
+      };
+    }
+    // fallback (promotion will be locked)
+    return { session: "", term: "", promotionAllowed: false };
+  }, []);
+
+  /* ===========================
+     UI STATE
+  =========================== */
+  const [selectedClass, setSelectedClass] = useState("");
   const [promotionPreview, setPromotionPreview] = useState([]);
   const [selectedStudents, setSelectedStudents] = useState({});
-  const [currentTerm, setCurrentTerm] = useState('3rd Term');
+  const [submitting, setSubmitting] = useState(false);
 
   /* ===========================
      MODAL
   =========================== */
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalMessage, setModalMessage] = useState('');
+  const [modalMessage, setModalMessage] = useState("");
   const [modalAction, setModalAction] = useState(() => {});
   const [isModalAlert, setIsModalAlert] = useState(false);
 
@@ -78,24 +109,65 @@ function PromotionManagement() {
   };
 
   /* ===========================
-     ACCESS CHECK
+     ACCESS CHECK (NO EARLY RETURN)
   =========================== */
   useEffect(() => {
-    const logged = JSON.parse(localStorage.getItem('loggedInUser'));
+    const logged = JSON.parse(localStorage.getItem("loggedInUser"));
+
     if (
       !logged ||
       ![
         ROLES.ACADEMIC_MANAGER,
         ROLES.ADMIN,
         ROLES.PRINCIPAL,
-        ROLES.SUPER_ADMIN
+        ROLES.SUPER_ADMIN,
       ].includes(logged.role)
     ) {
-      navigate('/login');
+      navigate("/login");
       return;
     }
+
     setUser(logged);
   }, [navigate]);
+
+  /* ===========================
+     OPTIONAL: Fetch promotions from server once (merge into local)
+     (safe, does not wipe local)
+  =========================== */
+  useEffect(() => {
+    const loadPromotions = async () => {
+      if (!navigator.onLine) return;
+
+      try {
+        const res = await apiFetch("/api/schoolPortalPromotions");
+        if (!res.ok) return;
+
+        const server = (await res.json().catch(() => [])) || [];
+        if (!Array.isArray(server)) return;
+
+        // merge unique by _id/id or fallback composite key
+        const map = new Map();
+        [...(promotions || []), ...server].forEach((p) => {
+          const key =
+            p._id ||
+            p.id ||
+            `${p.studentId || ""}|${p.date || ""}|${p.fromClass || ""}|${p.toClass || ""}`;
+          map.set(String(key), p);
+        });
+
+        const merged = Array.from(map.values()).sort((a, b) =>
+          String(b.date || "").localeCompare(String(a.date || ""))
+        );
+
+        setPromotions(merged);
+      } catch {
+        // silent
+      }
+    };
+
+    loadPromotions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* ===========================
      PROMOTION PREVIEW
@@ -107,74 +179,123 @@ function PromotionManagement() {
       return;
     }
 
-    const eligible = students.filter(
-      s => s.studentClass === selectedClass
-    );
+    const eligible = (students || []).filter((s) => s.studentClass === selectedClass);
 
-    const preview = eligible.map(s => ({
+    const preview = eligible.map((s) => ({
       ...s,
       fromClass: s.studentClass,
-      toClass: CLASS_PROGRESS[s.studentClass] || s.studentClass
+      toClass: CLASS_PROGRESS[s.studentClass] || s.studentClass,
     }));
 
-    const defaultSelection = {};
-    preview.forEach(p => {
-      defaultSelection[p.admissionNo] = true;
+    const defaults = {};
+    preview.forEach((p) => {
+      defaults[p.admissionNo] = true;
     });
 
     setPromotionPreview(preview);
-    setSelectedStudents(defaultSelection);
+    setSelectedStudents(defaults);
   }, [selectedClass, students]);
 
   /* ===========================
-     APPLY PROMOTION (ADMIN)
+     UNIQUE CLASSES (HOOK MUST BE TOP-LEVEL)
+  =========================== */
+  const uniqueClasses = useMemo(() => {
+    return [...new Set((students || []).map((s) => s.studentClass).filter(Boolean))].sort();
+  }, [students]);
+
+  /* ===========================
+     PERMISSIONS
+  =========================== */
+  const canApply = useMemo(() => {
+    return user?.role === ROLES.ADMIN || user?.role === ROLES.SUPER_ADMIN;
+  }, [user]);
+
+  const canPreview = useMemo(() => {
+    return canApply || user?.role === ROLES.ACADEMIC_MANAGER;
+  }, [canApply, user]);
+
+  /* ===========================
+     APPLY PROMOTION (ONLINE REQUIRED)
   =========================== */
   const applyPromotion = async () => {
-    if (currentTerm !== '3rd Term') {
-      showAlert('Promotion is allowed only in 3rd Term.');
-      return;
+    if (submitting) return;
+
+    // v0.1 gate: academic state must allow promotion
+    if (!academicState.promotionAllowed) {
+      return showAlert("Promotion is currently locked by Academic Calendar.");
     }
 
-    const approved = promotionPreview.filter(
-      p => selectedStudents[p.admissionNo]
-    );
-
-    if (approved.length === 0) {
-      showAlert('No students selected for promotion.');
-      return;
+    if (academicState.term && academicState.term !== "Third Term") {
+      return showAlert("Promotion is allowed only in Third Term.");
     }
 
-    const updatedStudents = students.map(s => {
-      const promoted = approved.find(
-        p => p.admissionNo === s.admissionNo
-      );
-      return promoted
-        ? { ...s, studentClass: promoted.toClass }
-        : s;
+    if (!navigator.onLine) {
+      return showAlert("Promotion requires internet connection (online mode).");
+    }
+
+    const approved = (promotionPreview || []).filter((p) => selectedStudents[p.admissionNo]);
+    if (!approved.length) return showAlert("No students selected for promotion.");
+
+    setSubmitting(true);
+
+    const nowIso = new Date().toISOString();
+    const session = academicState.session || "";
+    const term = academicState.term || "";
+
+    // 1) Update students locally first
+    const updatedStudents = (students || []).map((s) => {
+      const p = approved.find((x) => x.admissionNo === s.admissionNo);
+      return p ? { ...s, studentClass: p.toClass } : s;
     });
 
-    const promotionLogs = approved.map(p => ({
+    // 2) Build logs
+    const logs = approved.map((p) => ({
       studentId: p.admissionNo,
       fromClass: p.fromClass,
       toClass: p.toClass,
-      session: new Date().getFullYear(),
-      term: currentTerm,
-      promotedBy: user.username,
-      date: new Date().toISOString(),
-      rolledBack: false
+      session,
+      term,
+      promotedBy: user?.username || user?.staffId || "admin",
+      date: nowIso,
+      rolledBack: false,
     }));
 
+    // save local first (safe)
     setStudents(updatedStudents);
-    setPromotions([...promotions, ...promotionLogs]);
+    setPromotions((prev) => [...logs, ...(prev || [])]);
 
-    showAlert('Promotion applied successfully.');
-    setSelectedClass('');
+    // 3) Sync to backend (one-by-one, safe)
+    try {
+      for (const p of approved) {
+        // Student _id exists when loaded from backend
+        if (p._id) {
+          await apiFetch(`/api/schoolPortalStudents/${p._id}`, {
+            method: "PUT",
+            body: JSON.stringify({ studentClass: p.toClass }),
+          });
+        }
+      }
+
+      for (const log of logs) {
+        await apiFetch("/api/schoolPortalPromotions", {
+          method: "POST",
+          body: JSON.stringify(log),
+        });
+      }
+
+      showAlert("Promotion applied successfully ✅");
+      setSelectedClass("");
+    } catch {
+      showAlert("Promotion saved locally, but online sync failed. Data is not lost ✅");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  if (!user) return <div className="content-section">Loading...</div>;
-
-  const canApply = user.role === ROLES.ADMIN || user.role === ROLES.SUPER_ADMIN;
-  const canPreview = canApply || user.role === ROLES.ACADEMIC_MANAGER;
+  /* ===========================
+     RENDER (NO EARLY RETURN BEFORE HOOKS)
+  =========================== */
+  const isReady = !!user;
 
   return (
     <div className="content-section">
@@ -189,84 +310,88 @@ function PromotionManagement() {
         isAlert={isModalAlert}
       />
 
-      <h1>Student Promotion</h1>
-      <p>
-        Term: <strong>{currentTerm}</strong>
-      </p>
-
-      {canPreview && (
+      {!isReady ? (
+        <div className="content-section">Loading…</div>
+      ) : (
         <>
-          <label>Select Class</label>
-          <select
-            value={selectedClass}
-            onChange={e => setSelectedClass(e.target.value)}
-          >
-            <option value="">-- Select Class --</option>
-            {[...new Set(students.map(s => s.studentClass))].map(cls => (
-              <option key={cls} value={cls}>{cls}</option>
-            ))}
-          </select>
+          <h1>Student Promotion</h1>
+
+          <p style={{ color: "#555" }}>
+            Academic State → Session: <b>{academicState.session || "-"}</b> | Term:{" "}
+            <b>{academicState.term || "-"}</b> | Promotion Allowed:{" "}
+            <b>{academicState.promotionAllowed ? "YES" : "NO"}</b>
+          </p>
+
+          {canPreview && (
+            <>
+              <label>Select Class</label>
+              <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)}>
+                <option value="">-- Select Class --</option>
+                {uniqueClasses.map((cls) => (
+                  <option key={cls} value={cls}>
+                    {cls}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
+
+          {promotionPreview.length > 0 && (
+            <>
+              <h3>Promotion Preview</h3>
+              <table className="attendance-table">
+                <thead>
+                  <tr>
+                    <th>Select</th>
+                    <th>Name</th>
+                    <th>Admission No</th>
+                    <th>From</th>
+                    <th>To</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {promotionPreview.map((p) => (
+                    <tr key={p.admissionNo}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={!!selectedStudents[p.admissionNo]}
+                          onChange={(e) =>
+                            setSelectedStudents((prev) => ({
+                              ...prev,
+                              [p.admissionNo]: e.target.checked,
+                            }))
+                          }
+                          disabled={!canApply || submitting}
+                        />
+                      </td>
+                      <td>
+                        {p.firstName} {p.lastName}
+                      </td>
+                      <td>{p.admissionNo}</td>
+                      <td>{p.fromClass}</td>
+                      <td>{p.toClass}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+
+          {canApply && promotionPreview.length > 0 && (
+            <button
+              disabled={submitting}
+              onClick={() => showConfirm("Apply promotion for selected students?", applyPromotion)}
+            >
+              {submitting ? "Applying..." : "Apply Promotion"}
+            </button>
+          )}
+
+          <button onClick={() => navigate("/admin-dashboard")} style={{ marginTop: 10 }}>
+            Back to Dashboard
+          </button>
         </>
       )}
-
-      {promotionPreview.length > 0 && (
-        <>
-          <h3>Promotion Preview</h3>
-          <table className="attendance-table">
-            <thead>
-              <tr>
-                <th>Select</th>
-                <th>Name</th>
-                <th>Admission No</th>
-                <th>From</th>
-                <th>To</th>
-              </tr>
-            </thead>
-            <tbody>
-              {promotionPreview.map(p => (
-                <tr key={p.admissionNo}>
-                  <td>
-                    <input
-                      type="checkbox"
-                      checked={selectedStudents[p.admissionNo]}
-                      onChange={e =>
-                        setSelectedStudents(prev => ({
-                          ...prev,
-                          [p.admissionNo]: e.target.checked
-                        }))
-                      }
-                      disabled={!canApply}
-                    />
-                  </td>
-                  <td>{p.firstName} {p.lastName}</td>
-                  <td>{p.admissionNo}</td>
-                  <td>{p.fromClass}</td>
-                  <td>{p.toClass}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      )}
-
-      {canApply && promotionPreview.length > 0 && (
-        <button
-          onClick={() =>
-            showConfirm(
-              'Apply promotion for selected students?',
-              applyPromotion
-            )
-          }
-        >
-          Apply Promotion
-        </button>
-      )}
-
-      <button onClick={() => navigate('/admin-dashboard')}>
-        Back to Dashboard
-      </button>
     </div>
   );
 }
-
-export default PromotionManagement;

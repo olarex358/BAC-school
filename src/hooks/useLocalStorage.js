@@ -1,95 +1,97 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
+import { apiFetch } from "../api";
 
 /**
- * useLocalStorage(key, initialValue, apiUrl?)
- * - Works offline using localStorage
- * - If apiUrl is provided and online:
- *   - Fetches from server on load
- *   - Pushes updates to server when you setValue()
+ * v0.1 SAFE useLocalStorage
+ *
+ * - LocalStorage is the source of truth for UI
+ * - Server is READ-ONLY sync (never overwrite blindly)
+ * - All WRITES must go through apiFetch / offlineApi explicitly
  */
 function useLocalStorage(key, initialValue, apiUrl = null) {
-  const isFirstLoad = useRef(true);
-
   const readValue = () => {
     try {
       const item = window.localStorage.getItem(key);
       return item ? JSON.parse(item) : initialValue;
-    } catch (error) {
-      console.warn(`Error reading localStorage key "${key}":`, error);
+    } catch {
       return initialValue;
     }
   };
 
   const [storedValue, setStoredValue] = useState(readValue);
+  const [loading, setLoading] = useState(!!apiUrl);
 
-  // ✅ fetch latest from server (when online)
+  /* =========================
+     READ from server (safe)
+  ========================= */
   useEffect(() => {
-    const fetchFromServer = async () => {
-      if (!apiUrl) return;
-      if (!navigator.onLine) return;
+    if (!apiUrl) return;
+    if (!navigator.onLine) {
+      setLoading(false);
+      return;
+    }
 
+    let cancelled = false;
+
+    const fetchFromServer = async () => {
       try {
-        const res = await fetch(apiUrl);
-        if (!res.ok) return;
+        const res = await apiFetch(apiUrl);
+        if (!res.ok) throw new Error("Fetch failed");
 
         const data = await res.json();
-        if (Array.isArray(data) || typeof data === "object") {
-          window.localStorage.setItem(key, JSON.stringify(data));
-          setStoredValue(data);
+
+        // Only accept valid data
+        if (
+          (Array.isArray(data) && data.length > 0) ||
+          (typeof data === "object" && data !== null)
+        ) {
+          if (!cancelled) {
+            window.localStorage.setItem(key, JSON.stringify(data));
+            setStoredValue(data);
+          }
         }
-      } catch (err) {
-        // keep silent: offline-first
-        console.warn(`Server fetch failed for "${key}"`, err);
+      } catch {
+        // ❌ NEVER wipe local data
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     };
 
     fetchFromServer();
+    return () => {
+      cancelled = true;
+    };
   }, [apiUrl, key]);
 
-  // ✅ setValue: always update local, then try to sync online
-  const setValue = async (value) => {
+  /* =========================
+     LOCAL WRITE ONLY
+  ========================= */
+  const setValue = (value) => {
     try {
       const valueToStore =
         value instanceof Function ? value(storedValue) : value;
 
       setStoredValue(valueToStore);
       window.localStorage.setItem(key, JSON.stringify(valueToStore));
-
-      // sync to server if possible
-      if (apiUrl && navigator.onLine) {
-        // If value is array => replace on server (simple approach)
-        // If server expects something else, we can customize later
-        await fetch(apiUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(valueToStore),
-        }).catch(() => {});
-      }
-    } catch (error) {
-      console.warn(`Error setting localStorage key "${key}":`, error);
+    } catch {
+      // silent
     }
   };
 
-  // ✅ Listen for changes from other tabs
+  /* =========================
+     Cross-tab sync
+  ========================= */
   useEffect(() => {
-    const handleStorageChange = (e) => {
+    const onStorage = (e) => {
       if (e.key === key && e.newValue) {
         setStoredValue(JSON.parse(e.newValue));
       }
     };
-
-    window.addEventListener("storage", handleStorageChange);
-    return () => window.removeEventListener("storage", handleStorageChange);
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, [key]);
 
-  // ✅ one-time protection: don’t overwrite server on first mount
-  useEffect(() => {
-    if (isFirstLoad.current) {
-      isFirstLoad.current = false;
-    }
-  }, []);
-
-  return [storedValue, setValue];
+  return [storedValue, setValue, loading];
 }
 
 export default useLocalStorage;

@@ -1,8 +1,8 @@
-// src/pages/StaffPasswordChange.js
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import ConfirmModal from "../components/ConfirmModal";
 import passwordIcon from "../icon/password.png";
+import { apiFetch } from "../api";
 
 function StaffPasswordChange() {
   const [loggedInStaff, setLoggedInStaff] = useState(null);
@@ -17,7 +17,7 @@ function StaffPasswordChange() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMessage, setModalMessage] = useState("");
 
-  const showAlert = msg => {
+  const showAlert = (msg) => {
     setModalMessage(msg);
     setIsModalOpen(true);
   };
@@ -43,7 +43,7 @@ function StaffPasswordChange() {
     return Object.keys(errors).length === 0;
   };
 
-  const handlePasswordChange = async e => {
+  const handlePasswordChange = async (e) => {
     e.preventDefault();
     setFormErrors({});
 
@@ -53,9 +53,8 @@ function StaffPasswordChange() {
     }
 
     try {
-      const res = await fetch("http://localhost:5000/api/change-password", {
+      const res = await apiFetch("/api/change-password", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: loggedInStaff._id,
           oldPassword,
@@ -63,22 +62,21 @@ function StaffPasswordChange() {
         }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
         showAlert(data.message || "Password change failed.");
         return;
       }
 
-      showAlert(
-        "Password changed successfully! You will be logged out.",
-      );
+      showAlert("Password changed successfully! You will be logged out.");
 
       setTimeout(() => {
         localStorage.removeItem("loggedInUser");
+        localStorage.removeItem("authToken");
         navigate("/login");
       }, 1500);
-    } catch (err) {
+    } catch {
       showAlert("Network error. Please try again.");
     }
   };
@@ -112,7 +110,7 @@ function StaffPasswordChange() {
           placeholder="Old password"
           required
           value={oldPassword}
-          onChange={e => setOldPassword(e.target.value)}
+          onChange={(e) => setOldPassword(e.target.value)}
         />
 
         <input
@@ -120,7 +118,7 @@ function StaffPasswordChange() {
           placeholder="New password"
           required
           value={newPassword}
-          onChange={e => setNewPassword(e.target.value)}
+          onChange={(e) => setNewPassword(e.target.value)}
         />
         {formErrors.newPassword && (
           <p className="error">{formErrors.newPassword}</p>
@@ -131,7 +129,7 @@ function StaffPasswordChange() {
           placeholder="Confirm new password"
           required
           value={confirmNewPassword}
-          onChange={e => setConfirmNewPassword(e.target.value)}
+          onChange={(e) => setConfirmNewPassword(e.target.value)}
         />
         {formErrors.confirmNewPassword && (
           <p className="error">{formErrors.confirmNewPassword}</p>

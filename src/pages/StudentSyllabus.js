@@ -1,23 +1,29 @@
-// src/pages/StudentSyllabus.js
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import useLocalStorage from '../hooks/useLocalStorage';
-import ConfirmModal from '../components/ConfirmModal';
-
-
-// Import the syllabus icon
-import syllabusIcon from '../icon/sylabus.png';
+import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import useLocalStorage from "../hooks/useLocalStorage";
+import ConfirmModal from "../components/ConfirmModal";
+import syllabusIcon from "../icon/sylabus.png";
 
 function StudentSyllabus() {
   const [loggedInStudent, setLoggedInStudent] = useState(null);
   const navigate = useNavigate();
-  
-  const [allSyllabusEntries, , loadingSyllabus] = useLocalStorage('schoolPortalSyllabusEntries', [], 'http://localhost:5000/api/schoolPortalSyllabusEntries');
-  const [subjects] = useLocalStorage('schoolPortalSubjects', [], 'http://localhost:5000/api/schoolPortalSubjects');
+
+  // ✅ remove localhost
+  const [allSyllabusEntries, , loadingSyllabus] = useLocalStorage(
+    "schoolPortalSyllabusEntries",
+    [],
+    "/api/schoolPortalSyllabusEntries"
+  );
+
+  const [subjects] = useLocalStorage(
+    "schoolPortalSubjects",
+    [],
+    "/api/schoolPortalSubjects"
+  );
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalMessage, setModalMessage] = useState('');
+  const [modalMessage, setModalMessage] = useState("");
   const [isModalAlert, setIsModalAlert] = useState(false);
 
   const showAlert = (msg) => {
@@ -25,38 +31,43 @@ function StudentSyllabus() {
     setIsModalAlert(true);
     setIsModalOpen(true);
   };
-  
+
   useEffect(() => {
-    const user = JSON.parse(localStorage.getItem('loggedInUser'));
-    if (user && user.type === 'student') {
+    const user = JSON.parse(localStorage.getItem("loggedInUser"));
+    if (user && user.type === "student") {
       setLoggedInStudent(user);
     } else {
-      navigate('/login');
+      navigate("/login");
     }
   }, [navigate]);
 
   const handleLogout = () => {
-    localStorage.removeItem('loggedInUser');
-    navigate('/home');
+    localStorage.removeItem("loggedInUser");
+    localStorage.removeItem("authToken");
+    navigate("/home");
   };
 
-  if (!loggedInStudent) {
-    return <div className="content-section">Loading syllabus...</div>;
-  }
-
-  const studentRelevantSyllabus = allSyllabusEntries.filter(entry =>
-    (entry.audience === 'all' || entry.audience === 'students') &&
-    (entry.applicableClass === 'all' || entry.applicableClass === loggedInStudent.studentClass)
-  ).sort((a, b) => a.applicableClass.localeCompare(b.applicableClass) || a.applicableSubject.localeCompare(b.applicableSubject));
-
   const getSubjectName = (subjectCode) => {
-    const subject = subjects.find(s => s.subjectCode === subjectCode);
+    const subject = (subjects || []).find((s) => s.subjectCode === subjectCode);
     return subject ? subject.subjectName : subjectCode;
   };
 
   if (!loggedInStudent || loadingSyllabus) {
     return <div className="content-section">Loading syllabus...</div>;
   }
+
+  const studentRelevantSyllabus = (allSyllabusEntries || [])
+    .filter(
+      (entry) =>
+        (entry.audience === "all" || entry.audience === "students") &&
+        (entry.applicableClass === "all" ||
+          entry.applicableClass === loggedInStudent.studentClass)
+    )
+    .sort(
+      (a, b) =>
+        a.applicableClass.localeCompare(b.applicableClass) ||
+        a.applicableSubject.localeCompare(b.applicableSubject)
+    );
 
   return (
     <div className="content-section">
@@ -67,30 +78,35 @@ function StudentSyllabus() {
         onCancel={() => setIsModalOpen(false)}
         isAlert={isModalAlert}
       />
+
       <h1>My Syllabus</h1>
-      <p>Welcome, {loggedInStudent.firstName} {loggedInStudent.lastName}! Here are your relevant syllabus outlines:</p>
+      <p>
+        Welcome, {loggedInStudent.firstName} {loggedInStudent.lastName}! Here are your relevant syllabus outlines:
+      </p>
 
       {studentRelevantSyllabus.length > 0 ? (
         <div className="syllabus-grid">
-          {studentRelevantSyllabus.map(entry => (
-            <div key={entry._id} className="syllabus-card">
+          {studentRelevantSyllabus.map((entry) => (
+            <div key={entry._id || entry.id} className="syllabus-card">
               <div className="syllabus-header">
                 <img src={syllabusIcon} alt="Syllabus Icon" className="syllabus-icon" />
                 <div className="syllabus-info">
                   <h3 className="syllabus-title">{entry.title}</h3>
                   <p className="syllabus-meta">
-                    <strong>Class:</strong> {entry.applicableClass === 'all' ? 'All Classes' : entry.applicableClass}
+                    <strong>Class:</strong>{" "}
+                    {entry.applicableClass === "all" ? "All Classes" : entry.applicableClass}
                   </p>
                   <p className="syllabus-meta">
-                    <strong>Subject:</strong> {entry.applicableSubject === 'all' ? 'All Subjects' : getSubjectName(entry.applicableSubject)}
+                    <strong>Subject:</strong>{" "}
+                    {entry.applicableSubject === "all"
+                      ? "All Subjects"
+                      : getSubjectName(entry.applicableSubject)}
                   </p>
                 </div>
               </div>
-              <p className="syllabus-description">
-                {entry.description}
-              </p>
+              <p className="syllabus-description">{entry.description}</p>
               <p className="syllabus-audience">
-                Audience: {entry.audience.charAt(0).toUpperCase() + entry.audience.slice(1)}
+                Audience: {String(entry.audience || "all").charAt(0).toUpperCase() + String(entry.audience || "all").slice(1)}
               </p>
             </div>
           ))}
@@ -103,7 +119,9 @@ function StudentSyllabus() {
         For detailed subject-specific syllabus and learning objectives, please refer to the academic department or your subject teachers.
       </p>
 
-      <button onClick={handleLogout} className="logout-button">Logout</button>
+      <button onClick={handleLogout} className="logout-button">
+        Logout
+      </button>
     </div>
   );
 }
