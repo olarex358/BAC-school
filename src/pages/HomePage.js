@@ -22,16 +22,34 @@ export default function HomePage() {
 
       {/* Welcome */}
       <section className="welcome-address reveal">
-        <h2>Welcome</h2>
+        <h2>Welcome Busarialao College</h2>
         <p>
           {token
-            ? "Welcome back to the Busari-alao College Academic Portal."
+            ? "Welcome back to the Busarialao College Academic Portal."
             : "Welcome to Busarialao College  a place of excellence and discipline."}
         </p>
-        <p>
-          Our portal supports effective learning, transparency,
-          and collaboration among students, staff, and administrators.
-        </p>
+         <p>
+      A place of learning, character formation,
+    and excellence. We are proud to be an institution committed to academic
+    distinction, innovation, and the holistic development of our students.
+  </p>
+
+  <p>
+    At Busarialao College, we believe education goes beyond the classroom.
+    Our dedicated faculty, supportive learning environment, and well-structured
+    programs are designed to nurture intellectual growth, leadership skills,
+    and strong moral values.
+  </p>
+
+  <p>
+    As you explore our website, you will discover a vibrant academic community
+    where curiosity is encouraged, talents are developed, and future leaders
+    are shaped.
+  </p>
+
+  <p class="welcome-footer">
+    Thank you for choosing Busarialao College. Together, we build a future of excellence.
+  </p>
         <strong>Mr F. Onipede</strong>
         <p><span>Principal</span></p>
         
